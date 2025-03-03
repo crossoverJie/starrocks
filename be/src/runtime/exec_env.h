@@ -81,6 +81,8 @@ class RuntimeFilterCache;
 class ProfileReportWorker;
 class QuerySpillManager;
 class BlockCache;
+class ObjectCache;
+class StoragePageCache;
 struct RfTracePoint;
 
 class BackendServiceClient;
@@ -172,8 +174,6 @@ private:
     Status _init_mem_tracker();
     void _reset_tracker();
 
-    void _init_storage_page_cache();
-
     std::shared_ptr<MemTracker> regist_tracker(MemTrackerType type, int64_t bytes_limit, MemTracker* parent);
 
     // root process memory tracker
@@ -239,6 +239,31 @@ private:
     std::shared_ptr<MemTracker> _poco_connection_pool_mem_tracker;
 
     std::map<MemTrackerType, std::shared_ptr<MemTracker>> _mem_tracker_map;
+};
+
+class CacheEnv {
+public:
+    static CacheEnv* GetInstance();
+
+    Status init(const std::vector<StorePath>& store_paths);
+    void destroy();
+
+    void try_release_resource_before_core_dump();
+
+    BlockCache* block_cache() const { return _block_cache.get(); }
+    StoragePageCache* page_cache() const { return _page_cache.get(); }
+
+private:
+    Status _init_datacache();
+    Status _init_lru_base_object_cache();
+    Status _init_page_cache();
+
+    GlobalEnv* _global_env;
+    std::vector<StorePath> _store_paths;
+
+    std::shared_ptr<BlockCache> _block_cache;
+    std::shared_ptr<ObjectCache> _lru_based_object_cache;
+    std::shared_ptr<StoragePageCache> _page_cache;
 };
 
 // Execution environment for queries/plan fragments.
@@ -347,8 +372,6 @@ public:
 
     query_cache::CacheManagerRawPtr cache_mgr() const { return _cache_mgr; }
 
-    BlockCache* block_cache() const { return _block_cache; }
-
     spill::DirManager* spill_dir_mgr() const { return _spill_dir_mgr.get(); }
 
     ThreadPool* delete_file_thread_pool();
@@ -422,7 +445,6 @@ private:
 
     AgentServer* _agent_server = nullptr;
     query_cache::CacheManagerRawPtr _cache_mgr;
-    BlockCache* _block_cache = nullptr;
     std::shared_ptr<spill::DirManager> _spill_dir_mgr;
 };
 
