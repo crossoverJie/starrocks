@@ -19,9 +19,18 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Range;
 import com.google.common.collect.Sets;
+import com.nimbusds.oauth2.sdk.util.CollectionUtils;
 import com.starrocks.analysis.DateLiteral;
+import com.starrocks.analysis.Expr;
+import com.starrocks.analysis.FunctionCallExpr;
+import com.starrocks.analysis.IntLiteral;
 import com.starrocks.analysis.LiteralExpr;
 import com.starrocks.analysis.MaxLiteral;
+import com.starrocks.analysis.SlotRef;
+import com.starrocks.analysis.StringLiteral;
+import com.starrocks.analysis.TimestampArithmeticExpr;
+import com.starrocks.catalog.FunctionSet;
+import com.starrocks.catalog.MaterializedView;
 import com.starrocks.catalog.PartitionKey;
 import com.starrocks.catalog.PrimitiveType;
 import com.starrocks.catalog.Type;
@@ -31,6 +40,7 @@ import com.starrocks.sql.common.PartitionMapping;
 import com.starrocks.sql.common.SyncPartitionUtils;
 
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -56,20 +66,128 @@ public class MVEagerRangePartitionMapper extends MVRangePartitionMapper {
     public static final MVEagerRangePartitionMapper INSTANCE = new MVEagerRangePartitionMapper();
 
     @Override
-    public Map<String, Range<PartitionKey>> toMappingRanges(Map<String, Range<PartitionKey>> baseRangeMap,
-                                                            String granularity, PrimitiveType partitionType) {
+    public PartitionRangeWrapper toMappingRanges(Map<String, Range<PartitionKey>> baseRangeMap,
+                                                 String granularity, PrimitiveType partitionType,
+                                                 MaterializedView mv) {
 
-        Map<String, Range<PartitionKey>> result = Maps.newTreeMap();
         Set<PartitionMapping> mappings = Sets.newHashSet();
         for (Map.Entry<String, Range<PartitionKey>> rangeEntry : baseRangeMap.entrySet()) {
             List<PartitionMapping> rangeMappings = toMappingRanges(rangeEntry.getValue(), granularity);
             mappings.addAll(rangeMappings);
         }
+        // Generate the virtual partition mapping
+        Set<PartitionMapping> virtualPartitionMapping = generateVirtualPartitionMapping(granularity, mappings, mv);
+        mappings.addAll(virtualPartitionMapping);
+
+        Map<String, Range<PartitionKey>> result = generatePartitionRange(granularity, partitionType, mappings);
+        Map<String, Range<PartitionKey>> virtualPartitionRangeMap = generatePartitionRange(granularity, partitionType,
+                virtualPartitionMapping);
+        return new PartitionRangeWrapper(result, virtualPartitionRangeMap);
+    }
+
+    /**
+     * Generates virtual partition mappings for a mv.
+     *
+     * Key processing steps:
+     * 1. Extract and validate partition information from the materialized view
+     * 2. Analyze function expressions to validate granularity and collect range information
+     * 3. Determine the maximum range and starting point for mapping generation
+     * 4. Generate virtual partition mappings using the determined parameters
+     *
+     * @param granularity      The time unit granularity (e.g., "day", "month", "year")
+     * @param originMappings   The original set of partition mappings to base calculations on
+     * @param mv               The materialized view containing partition expressions
+     * @return                 A set of generated virtual partition mappings, empty if invalid conditions
+     * @throws SemanticException If an unsupported function is encountered
+     */
+    private Set<PartitionMapping> generateVirtualPartitionMapping(String granularity,
+                                                                  Set<PartitionMapping> originMappings,
+                                                                  MaterializedView mv) {
+        Set<PartitionMapping> result = Sets.newHashSet();
+        if (mv == null || CollectionUtils.isEmpty(originMappings)
+                || CollectionUtils.isEmpty(mv.getUnionOtherOutputExpression())) {
+            return result;
+        }
+        SlotRef mvPartitionSlotRef = mv.getPartitionExprMaps().entrySet().stream()
+                .findFirst()
+                .map(Map.Entry::getValue)
+                .orElse(null);
+        if (mvPartitionSlotRef == null) {
+            return result;
+        }
+
+        Map<String, Integer> func2Range = new HashMap<>();
+        for (Expr unionExpr : mv.getUnionOtherOutputExpression()) {
+            if (!(unionExpr instanceof FunctionCallExpr functionCallExpr)) {
+                continue;
+            }
+            if (!functionCallExpr.getFnName().getFunction().equalsIgnoreCase(FunctionSet.DATE_TRUNC)) {
+                continue;
+            }
+
+            for (Expr child : functionCallExpr.getChildren()) {
+                if (child instanceof StringLiteral granularityLiteral) {
+                    if (!granularityLiteral.getStringValue().equalsIgnoreCase(granularity)) {
+                        return result;
+                    }
+                } else if (child instanceof TimestampArithmeticExpr timestampArithmeticExpr) {
+                    String functionName = timestampArithmeticExpr.getFuncName();
+                    for (Expr timestampArithmeticExprChild : timestampArithmeticExpr.getChildren()) {
+                        if (timestampArithmeticExprChild instanceof SlotRef slotRefChild) {
+                            if (!slotRefChild.getColumnName().equalsIgnoreCase(mvPartitionSlotRef.getColumnName())) {
+                                return result;
+                            }
+                        } else if (timestampArithmeticExprChild instanceof IntLiteral intLiteralChild) {
+                            func2Range.put(functionName, Integer.valueOf(intLiteralChild.getStringValue()));
+                        }
+                    }
+                }
+            }
+        }
+        if (func2Range.isEmpty()) {
+            return result;
+        }
+
+        // Find the max range function
+        Map.Entry<String, Integer> maxRange = func2Range.entrySet().stream()
+                .max(Map.Entry.comparingByValue())
+                .get();
+
+        String functionName = maxRange.getKey();
+        // Generate partition mapping set
+        // For example, func2Range: DATE_ADD->1, if the original partition mappings are:
+        // 2023-10-01 00:00:00, 2023-10-02 00:00:00
+        // 2023-10-02 00:00:00, 2023-10-03 00:00:00
+        // 2023-10-10 00:00:00, 2023-10-11 00:00:00
+        // Generate the virtual partitions:
+        // 2023-10-03 00:00:00, 2023-10-04 00:00:00
+        // 2023-10-11 00:00:00, 2023-10-12 00:00:00
+        for (PartitionMapping originMapping : originMappings) {
+            PartitionMapping tempMapping = new PartitionMapping(
+                    originMapping.getLowerDateTime(), originMapping.getUpperDateTime());
+
+            for (int i = 0; i < maxRange.getValue(); i++) {
+                LocalDateTime lowerDateTime = SyncPartitionUtils.nextUpperDateTime(tempMapping.getLowerDateTime(),
+                        granularity, functionName);
+                LocalDateTime upperDateTime = SyncPartitionUtils.nextUpperDateTime(tempMapping.getUpperDateTime(),
+                        granularity, functionName);
+                PartitionMapping nextMapping = new PartitionMapping(lowerDateTime, upperDateTime);
+                tempMapping = nextMapping;
+                result.add(nextMapping);
+            }
+
+        }
+        result.removeAll(originMappings);
+        return result;
+    }
+
+    private Map<String, Range<PartitionKey>> generatePartitionRange(String granularity, PrimitiveType partitionType,
+                                                                    Set<PartitionMapping> mappings) {
+        Map<String, Range<PartitionKey>> result = Maps.newTreeMap();
         try {
             for (PartitionMapping mappedRange : mappings) {
                 LocalDateTime lowerDateTime = mappedRange.getLowerDateTime();
                 LocalDateTime upperDateTime = mappedRange.getUpperDateTime();
-
                 // mv partition name
                 String mvPartitionName = getMVPartitionName(lowerDateTime, upperDateTime, granularity);
                 // mv partition key
@@ -132,7 +250,8 @@ public class MVEagerRangePartitionMapper extends MVRangePartitionMapper {
         LocalDateTime curUpperDateTime = curLowerDateTime;
         while (upperDateTime.isAfter(curUpperDateTime)) {
             // compute the next upper bound by current upper bound
-            LocalDateTime nextUpperDateTime = SyncPartitionUtils.nextUpperDateTime(curUpperDateTime, granularity);
+            LocalDateTime nextUpperDateTime = SyncPartitionUtils.nextUpperDateTime(curUpperDateTime, granularity,
+                    FunctionSet.DATE_ADD);
             PartitionMapping nextMapping = new PartitionMapping(curUpperDateTime, nextUpperDateTime);
 
             // update curLowerDateTime

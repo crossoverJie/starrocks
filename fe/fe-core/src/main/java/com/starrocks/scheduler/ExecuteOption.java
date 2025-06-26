@@ -23,6 +23,7 @@ import org.apache.commons.collections4.CollectionUtils;
 
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 public class ExecuteOption {
 
@@ -44,6 +45,10 @@ public class ExecuteOption {
 
     @SerializedName("isReplay")
     private boolean isReplay = false;
+
+    // This virtual partition is used to refresh materialized views associated with multiple expressions in a union.
+    @SerializedName("virtualPartitions")
+    private Set<String> virtualPartitions;
 
     public ExecuteOption(Task task) {
         this(Constants.TaskRunPriority.LOWEST.value(), task.getSource().isMergeable(), task.getProperties());
@@ -108,6 +113,13 @@ public class ExecuteOption {
         isReplay = replay;
     }
 
+    public Set<String> getVirtualPartitions() {
+        return virtualPartitions;
+    }
+
+    public void setVirtualPartitions(Set<String> virtualPartitions) {
+        this.virtualPartitions = virtualPartitions;
+    }
     /**
      * Check if the current ExecuteOption can be merged with the given option:
      * - Only all taskRunProperties are empty or the same with specific keys, we can merge two pending task runs.
