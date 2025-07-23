@@ -40,6 +40,7 @@ import com.starrocks.sql.ast.warehouse.SuspendWarehouseStmt;
 import com.starrocks.system.ComputeNode;
 import com.starrocks.system.SystemInfoService;
 import com.starrocks.warehouse.DefaultWarehouse;
+import com.starrocks.warehouse.MultipleWarehouse;
 import com.starrocks.warehouse.Warehouse;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.logging.log4j.LogManager;
@@ -292,8 +293,8 @@ public class WarehouseManager implements Writable {
         // Generate new warehouse ID
         long warehouseId = GlobalStateMgr.getCurrentState().getNextId();
 
-        // Create warehouse instance (using DefaultWarehouse for now)
-        Warehouse warehouse = new DefaultWarehouse(warehouseId, warehouseName);
+        // Create warehouse instance (using MultipleWarehouse for now)
+        Warehouse warehouse = new MultipleWarehouse(warehouseId, warehouseName);
 
         // Add to manager
         try (LockCloseable ignored = new LockCloseable(rwLock.writeLock())) {
@@ -364,8 +365,9 @@ public class WarehouseManager implements Writable {
 
     public void replayCreateWarehouse(Warehouse warehouse) {
         try (LockCloseable ignored = new LockCloseable(rwLock.writeLock())) {
-            nameToWh.put(warehouse.getName(), warehouse);
-            idToWh.put(warehouse.getId(), warehouse);
+            Warehouse multipleWarehouse = new MultipleWarehouse(warehouse.getId(), warehouse.getName());
+            nameToWh.put(warehouse.getName(), multipleWarehouse);
+            idToWh.put(warehouse.getId(), multipleWarehouse);
         }
         LOG.info("Replayed create warehouse: {}", warehouse.getName());
 
