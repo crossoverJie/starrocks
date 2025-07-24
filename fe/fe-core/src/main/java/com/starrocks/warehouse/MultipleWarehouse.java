@@ -18,18 +18,18 @@ import java.util.List;
 
 public class MultipleWarehouse extends DefaultWarehouse {
 
-
-    public MultipleWarehouse(long id, String name) {
+    public MultipleWarehouse(long id, String name, long workerGroupId) {
         super(id, name);
+        super.workerGroupId = workerGroupId;
     }
     @Override
     public List<Long> getWorkerGroupIds() {
-        return List.of(this.getId());
+        return List.of(super.workerGroupId);
     }
 
     @Override
     public Long getAnyWorkerGroupId() {
-        return this.getId();
+        return super.workerGroupId;
     }
 
 

@@ -28,6 +28,9 @@ public abstract class Warehouse implements Writable {
     @SerializedName(value = "comment")
     protected String comment;
 
+    @SerializedName(value = "workerGroupId")
+    protected long workerGroupId;
+
     public Warehouse(long id, String name, String comment) {
         this.id = id;
         this.name = name;

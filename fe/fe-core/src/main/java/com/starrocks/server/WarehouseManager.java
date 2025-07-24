@@ -293,8 +293,9 @@ public class WarehouseManager implements Writable {
         // Generate new warehouse ID
         long warehouseId = GlobalStateMgr.getCurrentState().getNextId();
 
+        long workerGroupId = GlobalStateMgr.getCurrentState().getStarOSAgent().createWorkerGroup("x1");
         // Create warehouse instance (using MultipleWarehouse for now)
-        Warehouse warehouse = new MultipleWarehouse(warehouseId, warehouseName);
+        Warehouse warehouse = new MultipleWarehouse(warehouseId, warehouseName, workerGroupId);
 
         // Add to manager
         try (LockCloseable ignored = new LockCloseable(rwLock.writeLock())) {
@@ -365,9 +366,8 @@ public class WarehouseManager implements Writable {
 
     public void replayCreateWarehouse(Warehouse warehouse) {
         try (LockCloseable ignored = new LockCloseable(rwLock.writeLock())) {
-            Warehouse multipleWarehouse = new MultipleWarehouse(warehouse.getId(), warehouse.getName());
-            nameToWh.put(warehouse.getName(), multipleWarehouse);
-            idToWh.put(warehouse.getId(), multipleWarehouse);
+            nameToWh.put(warehouse.getName(), warehouse);
+            idToWh.put(warehouse.getId(), warehouse);
         }
         LOG.info("Replayed create warehouse: {}", warehouse.getName());
 
@@ -420,7 +420,7 @@ public class WarehouseManager implements Writable {
         // postImageLoad actions may depend on default_warehouse to perform actions.
         // The default_warehouse must be ready before postImageLoad.
         initDefaultWarehouse();
-        reader.readCollection(Warehouse.class, this::replayCreateWarehouse);
+        reader.readCollection(MultipleWarehouse.class, this::replayCreateWarehouse);
     }
 
     public void addWarehouse(Warehouse warehouse) {
