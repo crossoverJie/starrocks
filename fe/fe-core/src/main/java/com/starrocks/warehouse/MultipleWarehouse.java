@@ -14,22 +14,27 @@
 
 package com.starrocks.warehouse;
 
+import com.google.gson.annotations.SerializedName;
+
 import java.util.List;
 
 public class MultipleWarehouse extends DefaultWarehouse {
 
+    @SerializedName(value = "workerGroupId")
+    protected long workerGroupId;
+
     public MultipleWarehouse(long id, String name, long workerGroupId) {
         super(id, name);
-        super.workerGroupId = workerGroupId;
+        this.workerGroupId = workerGroupId;
     }
     @Override
     public List<Long> getWorkerGroupIds() {
-        return List.of(super.workerGroupId);
+        return List.of(this.workerGroupId);
     }
 
     @Override
     public Long getAnyWorkerGroupId() {
-        return super.workerGroupId;
+        return this.workerGroupId;
     }
 
 
