@@ -62,6 +62,11 @@ public class ProductFeature {
                 "high-performance columnar data transfer using Apache Arrow.",
                 "https://docs.starrocks.io/docs/unloading/arrow_flight/"
         ));
+        features.add(new ProductFeature(
+                "multi-warehouse",
+                "support multiple warehouses, each with its own worker group and configuration.",
+                "https://docs.starrocks.io/en-us/latest/administration/multi-warehouse"
+        ));
         FEATURES = ImmutableList.copyOf(features);
     }
 
