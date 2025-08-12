@@ -14,6 +14,7 @@
 
 package com.starrocks.server;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Sets;
 import com.staros.util.LockCloseable;
@@ -440,6 +441,14 @@ public class WarehouseManager implements Writable {
         try (LockCloseable ignored = new LockCloseable(rwLock.writeLock())) {
             nameToWh.put(warehouse.getName(), warehouse);
             idToWh.put(warehouse.getId(), warehouse);
+        }
+    }
+    @VisibleForTesting
+    public void clearWarehouse() {
+        try (LockCloseable ignored = new LockCloseable(rwLock.writeLock())) {
+            // only clean nameToWh where name is not default warehouse
+            nameToWh.entrySet().removeIf(entry -> !entry.getKey().equals(DEFAULT_WAREHOUSE_NAME));
+            idToWh.entrySet().removeIf(entry -> !entry.getKey().equals(DEFAULT_WAREHOUSE_ID));
         }
     }
 }
