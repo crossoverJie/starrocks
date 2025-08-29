@@ -18,6 +18,7 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Sets;
 import com.staros.util.LockCloseable;
+import com.starrocks.common.Config;
 import com.starrocks.common.DdlException;
 import com.starrocks.common.ErrorCode;
 import com.starrocks.common.ErrorReportException;
@@ -103,6 +104,9 @@ public class WarehouseManager implements Writable {
         try (LockCloseable ignored = new LockCloseable(rwLock.readLock())) {
             Warehouse warehouse = nameToWh.get(warehouseName);
             if (warehouse == null) {
+                if (Config.enable_rollback_default_warehouse) {
+                    return new DefaultWarehouse(DEFAULT_WAREHOUSE_ID, DEFAULT_WAREHOUSE_NAME);
+                }
                 throw ErrorReportException.report(ErrorCode.ERR_UNKNOWN_WAREHOUSE, String.format("name: %s", warehouseName));
             }
             return warehouse;
@@ -113,6 +117,9 @@ public class WarehouseManager implements Writable {
         try (LockCloseable ignored = new LockCloseable(rwLock.readLock())) {
             Warehouse warehouse = idToWh.get(warehouseId);
             if (warehouse == null) {
+                if (Config.enable_rollback_default_warehouse) {
+                    return getWarehouse(DEFAULT_WAREHOUSE_NAME);
+                }
                 throw ErrorReportException.report(ErrorCode.ERR_UNKNOWN_WAREHOUSE, String.format("id: %d", warehouseId));
             }
             return warehouse;
@@ -121,13 +128,21 @@ public class WarehouseManager implements Writable {
 
     public Warehouse getWarehouseAllowNull(String warehouseName) {
         try (LockCloseable ignored = new LockCloseable(rwLock.readLock())) {
-            return nameToWh.get(warehouseName);
+            Warehouse warehouse = nameToWh.get(warehouseName);
+            if (warehouse == null && Config.enable_rollback_default_warehouse) {
+                return getWarehouse(DEFAULT_WAREHOUSE_ID);
+            }
+            return warehouse;
         }
     }
 
     public Warehouse getWarehouseAllowNull(long warehouseId) {
         try (LockCloseable ignored = new LockCloseable(rwLock.readLock())) {
-            return idToWh.get(warehouseId);
+            Warehouse warehouse = idToWh.get(warehouseId);
+            if (warehouse == null && Config.enable_rollback_default_warehouse) {
+                return getWarehouse(DEFAULT_WAREHOUSE_ID);
+            }
+            return warehouse;
         }
     }
 
@@ -247,11 +262,11 @@ public class WarehouseManager implements Writable {
     }
 
     public Warehouse getCompactionWarehouse() {
-        return getWarehouse(DEFAULT_WAREHOUSE_ID);
+        return getWarehouse(Config.lake_compaction_warehouse);
     }
 
     public Warehouse getBackgroundWarehouse() {
-        return getWarehouse(DEFAULT_WAREHOUSE_ID);
+        return getWarehouse(Config.lake_background_warehouse);
     }
 
     public Optional<Long> selectWorkerGroupByWarehouseId(long warehouseId) {
