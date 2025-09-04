@@ -278,6 +278,15 @@ public class ResourceGroupAnalyzer {
                     resourceGroup.setPartitionNum(partitionNum);
                     continue;
                 }
+
+                if (key.equalsIgnoreCase(ResourceGroup.TOTAL_PARTITION_NUM)) {
+                    int totalPartitionNum = Integer.parseInt(value);
+                    if (totalPartitionNum <= 0) {
+                        throw new SemanticException("total_partition_num should be greater than 0");
+                    }
+                    resourceGroup.setTotalPartitionNum(totalPartitionNum);
+                    continue;
+                }
             } catch (NumberFormatException exception) {
                 throw new SemanticException(String.format("The value type of the property `%s` must be a valid numeric type, " +
                         "but it is set to `%s`", e.getKey(), e.getValue()));
