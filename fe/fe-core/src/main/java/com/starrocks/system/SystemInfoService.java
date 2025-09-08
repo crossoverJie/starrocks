@@ -432,20 +432,14 @@ public class SystemInfoService implements GsonPostProcessable {
     }
 
     public void dropComputeNodes(DropComputeNodeClause dropComputeNodeClause) throws DdlException {
-        String warehouse = dropComputeNodeClause.getWarehouse();
-        // check if the warehouse exist
-        if (GlobalStateMgr.getCurrentState().getWarehouseMgr().getWarehouseAllowNull(warehouse) == null) {
-            ErrorReport.reportDdlException(ErrorCode.ERR_UNKNOWN_WAREHOUSE, String.format("name: %s", warehouse));
-        }
-
         for (Pair<String, Integer> pair : dropComputeNodeClause.getHostPortPairs()) {
-            dropComputeNode(pair.first, pair.second, warehouse);
+            dropComputeNode(pair.first, pair.second, dropComputeNodeClause.warehouse);
         }
     }
 
     /*
      * The arg warehouse can be null or empty,
-     * which means ignore warehouse when dropping compute node, 
+     * which means ignore warehouse when dropping compute node,
      * otherwise it will be checked and an exception will be thrown if it is not matched.
      */
     public void dropComputeNode(String host, int heartbeatPort, String warehouse)
@@ -455,11 +449,20 @@ public class SystemInfoService implements GsonPostProcessable {
             throw new DdlException("compute node does not exists[" +
                     NetUtils.getHostPortInAccessibleFormat(host, heartbeatPort) + "]");
         }
+        Warehouse wh = GlobalStateMgr.getCurrentState().getWarehouseMgr().getWarehouseAllowNull(dropComputeNode.getWarehouseId());
+
+        // If warehouse is null, use the warehouse of the compute node
+        if (warehouse == null) {
+            warehouse = wh.getName();
+        }
+
+        // check if the warehouse exist
+        if (GlobalStateMgr.getCurrentState().getWarehouseMgr().getWarehouseAllowNull(warehouse) == null) {
+            ErrorReport.reportDdlException(ErrorCode.ERR_UNKNOWN_WAREHOUSE, String.format("name: %s", warehouse));
+        }
 
         // check if warehouseName is right
-        Warehouse wh = GlobalStateMgr.getCurrentState().getWarehouseMgr()
-                .getWarehouseAllowNull(dropComputeNode.getWarehouseId());
-        if (wh != null && !Strings.isNullOrEmpty(warehouse) && !warehouse.equalsIgnoreCase(wh.getName())) {
+        if (wh != null && !warehouse.equalsIgnoreCase(wh.getName())) {
             throw new DdlException("compute node [" + host + ":" + heartbeatPort +
                     "] does not exist in warehouse " + warehouse);
         }
@@ -558,7 +561,7 @@ public class SystemInfoService implements GsonPostProcessable {
     /*
      * Final entry of dropping backend.
      * The arg warehouse can be null or empty,
-     * which means ignore warehouse when dropping backend node, 
+     * which means ignore warehouse when dropping backend node,
      * otherwise it will be checked and an exception will be thrown if it is not matched.
      */
     public void dropBackend(String host, int heartbeatPort, String warehouse, boolean needCheckWithoutForce)

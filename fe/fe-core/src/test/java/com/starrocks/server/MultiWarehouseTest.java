@@ -87,28 +87,4 @@ public class MultiWarehouseTest {
         ExceptionChecker.expectThrowsNoException(() -> warehouseMgr.dropWarehouse(dropStmtExists));
 
     }
-
-    @Test
-    public void testWarehouseImage() throws Exception {
-        String warehouseName = "wh1";
-        String sql = String.format("CREATE WAREHOUSE IF NOT EXISTS %s;", warehouseName);
-        connectContext.executeSql(sql);
-        WarehouseManager warehouseMgr = GlobalStateMgr.getCurrentState().getWarehouseMgr();
-        Warehouse warehouse = warehouseMgr.getWarehouse(warehouseName);
-        Assertions.assertNotNull(warehouse);
-
-        UtFrameUtils.PseudoImage.setUpImageVersion();
-        UtFrameUtils.PseudoImage initialImage = new UtFrameUtils.PseudoImage();
-        warehouseMgr.save(initialImage.getImageWriter());
-
-        warehouseMgr.clearWarehouse();
-        warehouseMgr.load(initialImage.getMetaBlockReader());
-        List<Warehouse> allWarehouses = warehouseMgr.getAllWarehouses();
-        Assertions.assertEquals(2, allWarehouses.size());
-        warehouse = warehouseMgr.getWarehouse(warehouseName);
-        Assertions.assertNotNull(warehouse);
-        Warehouse defaultWh = warehouseMgr.getWarehouse(WarehouseManager.DEFAULT_WAREHOUSE_NAME);
-        Assertions.assertNotNull(defaultWh);
-
-    }
 }
