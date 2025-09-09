@@ -163,10 +163,16 @@ public class WarehouseManager implements Writable {
     }
 
     private List<Long> getAllComputeNodeIds(long warehouseId, long workerGroupId) {
-        Warehouse warehouse = getWarehouse(warehouseId);
+        workerGroupId = selectWorkerGroupInternal(warehouseId)
+                .orElse(StarOSAgent.DEFAULT_WORKER_GROUP_ID);
 
         try {
-            return GlobalStateMgr.getCurrentState().getStarOSAgent().getWorkersByWorkerGroup(workerGroupId);
+            List<Long> workers =
+                    GlobalStateMgr.getCurrentState().getStarOSAgent().getWorkersByWorkerGroup(workerGroupId);
+            if (CollectionUtils.isEmpty(workers) && Config.enable_rollback_default_cn_node) {
+                return getAllComputeNodeIds(DEFAULT_WAREHOUSE_ID, workerGroupId);
+            }
+            return workers;
         } catch (StarRocksException e) {
             LOG.warn("Fail to get compute node ids from starMgr : {}", e.getMessage());
             return new ArrayList<>();
