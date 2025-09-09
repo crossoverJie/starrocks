@@ -444,23 +444,24 @@ public class SystemInfoService implements GsonPostProcessable {
      */
     public void dropComputeNode(String host, int heartbeatPort, String warehouse)
             throws DdlException {
+
+        if (warehouse != null) {
+            // check if the warehouse exist
+            if (GlobalStateMgr.getCurrentState().getWarehouseMgr().getWarehouseAllowNull(warehouse) == null) {
+                ErrorReport.reportDdlException(ErrorCode.ERR_UNKNOWN_WAREHOUSE, String.format("name: %s", warehouse));
+            }
+        }
+
         ComputeNode dropComputeNode = getComputeNodeWithHeartbeatPort(host, heartbeatPort);
         if (dropComputeNode == null) {
             throw new DdlException("compute node does not exists[" +
                     NetUtils.getHostPortInAccessibleFormat(host, heartbeatPort) + "]");
         }
         Warehouse wh = GlobalStateMgr.getCurrentState().getWarehouseMgr().getWarehouseAllowNull(dropComputeNode.getWarehouseId());
-
         // If warehouse is null, use the warehouse of the compute node
         if (warehouse == null) {
             warehouse = wh.getName();
         }
-
-        // check if the warehouse exist
-        if (GlobalStateMgr.getCurrentState().getWarehouseMgr().getWarehouseAllowNull(warehouse) == null) {
-            ErrorReport.reportDdlException(ErrorCode.ERR_UNKNOWN_WAREHOUSE, String.format("name: %s", warehouse));
-        }
-
         // check if warehouseName is right
         if (wh != null && !warehouse.equalsIgnoreCase(wh.getName())) {
             throw new DdlException("compute node [" + host + ":" + heartbeatPort +
