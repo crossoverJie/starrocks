@@ -163,16 +163,10 @@ public class WarehouseManager implements Writable {
     }
 
     private List<Long> getAllComputeNodeIds(long warehouseId, long workerGroupId) {
-        workerGroupId = selectWorkerGroupInternal(warehouseId)
-                .orElse(StarOSAgent.DEFAULT_WORKER_GROUP_ID);
+        Warehouse warehouse = getWarehouse(warehouseId);
 
         try {
-            List<Long> workers =
-                    GlobalStateMgr.getCurrentState().getStarOSAgent().getWorkersByWorkerGroup(workerGroupId);
-            if (CollectionUtils.isEmpty(workers) && Config.enable_rollback_default_cn_node) {
-                return getAllComputeNodeIds(DEFAULT_WAREHOUSE_ID, workerGroupId);
-            }
-            return workers;
+            return GlobalStateMgr.getCurrentState().getStarOSAgent().getWorkersByWorkerGroup(workerGroupId);
         } catch (StarRocksException e) {
             LOG.warn("Fail to get compute node ids from starMgr : {}", e.getMessage());
             return new ArrayList<>();
@@ -229,10 +223,12 @@ public class WarehouseManager implements Writable {
     public List<Long> getAllComputeNodeIdsAssignToTablet(Long warehouseId, LakeTablet tablet) {
         try {
             long workerGroupId = selectWorkerGroupInternal(warehouseId).orElse(StarOSAgent.DEFAULT_WORKER_GROUP_ID);
+            ShardInfo shardInfo = GlobalStateMgr.getCurrentState().getStarOSAgent()
+                    .getShardInfo(tablet.getShardId(), workerGroupId);
+
             return GlobalStateMgr.getCurrentState().getStarOSAgent()
-                    .getAllNodeIdsByShard(tablet.getShardId(), workerGroupId);
+                    .getAllNodeIdsByShard(shardInfo, true);
         } catch (StarRocksException e) {
-            LOG.warn("get all compute node ids assign to tablet {} fail {}.", tablet.getId(), e.getMessage());
             return null;
         }
     }
