@@ -40,6 +40,7 @@ import com.starrocks.connector.statistics.StatisticsUtils;
 import com.starrocks.metric.LongCounterMetric;
 import com.starrocks.metric.MetricRepo;
 import com.starrocks.planner.ScanNode;
+import com.starrocks.qe.AuditInternalLog;
 import com.starrocks.qe.ConnectContext;
 import com.starrocks.qe.StmtExecutor;
 import com.starrocks.server.GlobalStateMgr;
@@ -195,7 +196,7 @@ public class StatisticExecutor {
                             .map(x -> StatisticUtils.getQueryStatisticsColumnType(table, x.getColumnName()))
                             .collect(Collectors.toList());
 
-            String statsSql = StatisticSQLBuilder.buildQueryFullStatisticsSQL(tableId, columnNamesForStats, 
+            String statsSql = StatisticSQLBuilder.buildQueryFullStatisticsSQL(tableId, columnNamesForStats,
                     columnTypesForStats, partitionIds);
             List<TStatisticData> tStatisticData = executeStatisticDQL(context, statsSql);
             columnStats.addAll(tStatisticData);
@@ -706,6 +707,7 @@ public class StatisticExecutor {
         if (FeConstants.enableUnitStatistics) {
             return Collections.emptyList();
         }
+        Stopwatch watch = Stopwatch.createStarted();
         StatementBase parsedStmt = SqlParser.parseOneWithStarRocksDialect(sql, context.getSessionVariable());
         ExecPlan execPlan = StatementPlanner.plan(parsedStmt, context, TResultSinkType.STATISTIC);
         StmtExecutor executor = StmtExecutor.newInternalExecutor(context, parsedStmt);
@@ -720,8 +722,8 @@ public class StatisticExecutor {
             throw new SemanticException("Statistics query fail | Error Message [%s] | QueryId [%s] | SQL [%s]",
                     errorMsg, DebugUtil.printId(context.getQueryId()), sql);
         } else {
-            AuditLog.getStatisticAudit().info("statistic execute query | QueryId [{}] | SQL: {}",
-                    DebugUtil.printId(context.getQueryId()), sql);
+            AuditInternalLog.handleInternalLog(AuditInternalLog.InternalType.QUERY, DebugUtil.printId(context.getQueryId()),
+                    sql, watch);
             return sqlResult.first;
         }
     }
@@ -729,13 +731,14 @@ public class StatisticExecutor {
     private static boolean executeDML(ConnectContext context, String sql) {
         StatementBase parsedStmt;
         try {
+            Stopwatch watch = Stopwatch.createStarted();
             parsedStmt = SqlParser.parseOneWithStarRocksDialect(sql, context.getSessionVariable());
             StmtExecutor executor = StmtExecutor.newInternalExecutor(context, parsedStmt);
             context.setExecutor(executor);
             context.setQueryId(UUIDUtil.genUUID());
             executor.execute();
-            AuditLog.getStatisticAudit().info("statistic execute DML | QueryId [{}] | SQL: {}",
-                    DebugUtil.printId(context.getQueryId()), sql);
+            AuditInternalLog.handleInternalLog(AuditInternalLog.InternalType.DML, DebugUtil.printId(context.getQueryId()),
+                    sql, watch);
             return true;
         } catch (Exception e) {
             LOG.warn("statistic DML fail | {} | SQL {}", DebugUtil.printId(context.getQueryId()), sql, e);

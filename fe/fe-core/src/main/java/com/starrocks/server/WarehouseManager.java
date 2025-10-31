@@ -17,6 +17,7 @@ package com.starrocks.server;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Sets;
+import com.staros.proto.ShardInfo;
 import com.staros.util.LockCloseable;
 import com.starrocks.common.Config;
 import com.starrocks.common.DdlException;
@@ -223,12 +224,10 @@ public class WarehouseManager implements Writable {
     public List<Long> getAllComputeNodeIdsAssignToTablet(Long warehouseId, LakeTablet tablet) {
         try {
             long workerGroupId = selectWorkerGroupInternal(warehouseId).orElse(StarOSAgent.DEFAULT_WORKER_GROUP_ID);
-            ShardInfo shardInfo = GlobalStateMgr.getCurrentState().getStarOSAgent()
-                    .getShardInfo(tablet.getShardId(), workerGroupId);
-
             return GlobalStateMgr.getCurrentState().getStarOSAgent()
-                    .getAllNodeIdsByShard(shardInfo, true);
+                    .getAllNodeIdsByShard(tablet.getShardId(), workerGroupId);
         } catch (StarRocksException e) {
+            LOG.warn("get all compute node ids assign to tablet {} fail {}.", tablet.getId(), e.getMessage());
             return null;
         }
     }
