@@ -20,14 +20,15 @@
 #include <unordered_map>
 #include <vector>
 
+#include "base/concurrency/bthread_shared_mutex.h"
 #include "column/chunk.h"
-#include "common/closure_guard.h"
 #include "common/compiler_util.h"
 #include "common/statusor.h"
 #include "exec/tablet_info.h"
 #include "fs/bundle_file.h"
 #include "gen_cpp/internal_service.pb.h"
 #include "gutil/macros.h"
+#include "runtime/closure_guard.h"
 #include "runtime/descriptors.h"
 #include "runtime/load_channel.h"
 #include "runtime/mem_pool.h"
@@ -41,7 +42,6 @@
 #include "storage/memtable.h"
 #include "storage/memtable_flush_executor.h"
 #include "storage/storage_engine.h"
-#include "util/bthreads/bthread_shared_mutex.h"
 #include "util/compression/block_compression.h"
 #include "util/countdown_latch.h"
 #include "util/runtime_profile.h"

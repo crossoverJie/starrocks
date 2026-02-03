@@ -1735,7 +1735,7 @@ public class OlapTable extends Table {
                     for (MaterializedIndex deleteIndex : shadowIndex) {
                         physicalPartition.deleteMaterializedIndexByMetaId(deleteIndex.getMetaId());
                     }
-                    for (MaterializedIndex idx : physicalPartition.getLatestMaterializedIndices(extState)) {
+                    for (MaterializedIndex idx : physicalPartition.getAllMaterializedIndices(extState)) {
                         idx.setState(IndexState.NORMAL);
                         if (copied.isCloudNativeTableOrMaterializedView()) {
                             continue;
@@ -3341,5 +3341,9 @@ public class OlapTable extends Table {
     @Override
     public Set<TableOperation> getSupportedOperations() {
         return Sets.newHashSet(TableOperation.values());
+    }
+
+    public boolean isRangeDistribution() {
+        return defaultDistributionInfo instanceof RangeDistributionInfo;
     }
 }

@@ -20,14 +20,14 @@
 
 #include <thread>
 
+#include "base/random/random.h"
+#include "base/testutil/assert.h"
 #include "column/column_helper.h"
 #include "column/column_viewer.h"
 #include "common/statusor.h"
 #include "exprs/function_context.h"
 #include "runtime/runtime_state.h"
-#include "testutil/assert.h"
 #include "types/logical_type.h"
-#include "util/random.h"
 #include "util/time.h"
 
 namespace starrocks {

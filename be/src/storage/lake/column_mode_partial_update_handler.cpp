@@ -14,6 +14,8 @@
 
 #include "storage/lake/column_mode_partial_update_handler.h"
 
+#include "base/phmap/phmap.h"
+#include "base/utility/defer_op.h"
 #include "common/tracer.h"
 #include "fs/fs_util.h"
 #include "fs/key_cache.h"
@@ -34,8 +36,6 @@
 #include "storage/rowset/segment_options.h"
 #include "storage/rowset/segment_rewriter.h"
 #include "storage/tablet.h"
-#include "util/defer_op.h"
-#include "util/phmap/phmap.h"
 #include "util/stack_util.h"
 #include "util/time.h"
 #include "util/trace.h"

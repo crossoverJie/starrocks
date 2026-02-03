@@ -17,14 +17,14 @@
 
 #pragma once
 
-#include <boost/algorithm/string.hpp>
 #include <cmath>
 #include <iomanip>
 #include <sstream>
 
+#include "base/utility/template_util.h"
 #include "gen_cpp/RuntimeProfile_types.h"
+#include "gutil/strings/join.h"
 #include "util/cpu_info.h"
-#include "util/template_util.h"
 
 /// Truncate a double to offset decimal places.
 #define DOUBLE_TRUNCATE(val, offset) floor(val* pow(10, offset)) / pow(10, offset)
@@ -177,7 +177,7 @@ public:
             strings.push_back(ss.str());
         }
 
-        (*out) << "[" << boost::algorithm::join(strings, ", ") << "]";
+        (*out) << "[" << JoinStrings(strings, ", ") << "]";
     }
 
     /// Convenience method
