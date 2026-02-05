@@ -47,6 +47,7 @@
 #include "agent/publish_version.h"
 #include "agent/task_worker_pool.h"
 #include "base/concurrency/stopwatch.hpp"
+#include "base/time/time.h"
 #include "brpc/errno.pb.h"
 #include "cache/datacache.h"
 #include "column/stream_chunk.h"
@@ -89,7 +90,6 @@
 #include "util/failpoint/fail_point.h"
 #include "util/hash_util.hpp"
 #include "util/thrift_util.h"
-#include "util/time.h"
 #include "util/time_guard.h"
 #include "util/uid_util.h"
 
@@ -830,7 +830,7 @@ void PInternalServiceImplBase<T>::trigger_profile_report(google::protobuf::RpcCo
             return;
         }
         pipeline::DriverExecutor* driver_executor = fragment_ctx->workgroup()->executors()->driver_executor();
-        driver_executor->report_exec_state(query_ctx.get(), fragment_ctx.get(), Status::OK(), false, true);
+        driver_executor->report_exec_state(query_ctx.get(), fragment_ctx.get(), Status::OK(), false);
     }
 }
 

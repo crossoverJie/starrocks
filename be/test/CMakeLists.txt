@@ -334,8 +334,6 @@ set(EXEC_FILES
         ./serde/column_array_serde_test.cpp
         ./serde/protobuf_serde_test.cpp
         ./types/bitmap_value_test.cpp
-        ./types/int256_test.cpp
-        ./types/int256_arithmetic_test.cpp
         ./types/type_checker_test.cpp
         ./types/type_checker_xml_loader_test.cpp 
         ./types/variant_value_test.cpp
@@ -355,7 +353,6 @@ set(EXEC_FILES
         ./util/cidr_test.cpp
         ./util/core_local_test.cpp
         ./util/core_local_counter_test.cpp
-        ./util/countdown_latch_test.cpp
         ./util/cpu_info_test.cpp
         ./util/crc32c_test.cpp
         ./util/dynamic_cache_test.cpp
@@ -366,14 +363,12 @@ set(EXEC_FILES
         ./util/json_util_test.cpp
         ./util/json_flattener_test.cpp
         ./util/metrics/file_scan_metrics_test.cpp
-        ./util/monotime_test.cpp
         ./util/mysql_row_buffer_test.cpp
         ./util/new_metrics_test.cpp
         ./util/parse_util_test.cpp
         ./util/rle_encoding_test.cpp
         ./util/runtime_profile_test.cpp
         ./base/raw_container_test.cpp
-        ./util/string_parser_test.cpp
         ./util/string_util_test.cpp
         ./util/tdigest_test.cpp
         ./util/thread_test.cpp
@@ -392,7 +387,6 @@ set(EXEC_FILES
         ./util/system_metrics_test.cpp
         ./util/ratelimit_test.cpp
         ./util/cpu_usage_info_test.cpp
-        ./util/timezone_utils_test.cpp
         ./util/stack_trace_mutex_test.cpp
         ./util/download_util_test.cpp
         ./util/numeric_types_test.cpp

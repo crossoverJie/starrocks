@@ -22,10 +22,13 @@ set(BASE_TEST_FILES
     concurrency/await_test.cpp
     concurrency/blocking_queue_test.cpp
     concurrency/concurrent_limiter_test.cpp
+    concurrency/countdown_latch_test.cpp
     concurrency/shared_mutex_test.cpp
     container/heap_test.cpp
     container/priority_queue_test.cpp
     coding_test.cpp
+    int256_arithmetic_test.cpp
+    int256_test.cpp
     phmap_test.cpp
     crypto/md5_test.cpp
     json/easy_json-test.cpp
@@ -39,8 +42,11 @@ set(BASE_TEST_FILES
     string/c_string_test.cpp
     string/faststring_test.cpp
     string/memcmp_test.cpp
+    string/string_parser_test.cpp
     string/slice_test.cpp
     string/utf8_check_test.cpp
+    time/monotime_test.cpp
+    time/timezone_utils_test.cpp
     utility/scoped_cleanup_test.cpp
     uuid/uuid_generator_test.cpp
     status_test.cpp

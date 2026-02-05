@@ -21,7 +21,9 @@
 #include <memory>
 #include <utility>
 
+#include "base/concurrency/countdown_latch.h"
 #include "base/utility/defer_op.h"
+#include "common/system/cpu_info.h"
 #include "fs/fs_util.h"
 #include "fs/key_cache.h"
 #include "gutil/strings/substitute.h"
@@ -37,8 +39,6 @@
 #include "storage/sstable/merger.h"
 #include "storage/sstable/options.h"
 #include "storage/sstable/table_builder.h"
-#include "util/countdown_latch.h"
-#include "util/cpu_info.h"
 #include "util/starrocks_metrics.h"
 #include "util/trace.h"
 

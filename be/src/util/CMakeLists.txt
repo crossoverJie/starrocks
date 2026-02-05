@@ -30,14 +30,12 @@ set(UTIL_FILES
   compression/compression_context_pool_singletons.cpp
   compression/stream_compressor.cpp
   compression/stream_decompressor.cpp
-  cpu_info.cpp
   cpu_usage_info.cpp
   cpu_util.cpp
   crc32c.cpp
   date_func.cpp
   dynamic_util.cpp
   debug_util.cpp
-  disk_info.cpp
   download_util.cpp
   hash_util.hpp
   json_util.cpp
@@ -45,7 +43,6 @@ set(UTIL_FILES
   json_flattener.cpp
   json_converter.cpp
   starrocks_metrics.cpp
-  mem_info.cpp
   metrics.cpp
   metrics/file_scan_metrics.cpp
   misc.cpp
@@ -55,7 +52,6 @@ set(UTIL_FILES
 # perf-counters.cpp
   runtime_profile.cpp
   static_asserts.cpp
-  string_parser.cpp
   thrift_util.cpp
   thrift_client.cpp
   thrift_server.cpp
@@ -66,7 +62,6 @@ set(UTIL_FILES
   url_coding.cpp
   mysql_row_buffer.cpp
   filesystem_util.cc
-  time.cpp
 # coding_util.cpp
   cidr.cpp
   core_local.cpp
@@ -75,12 +70,10 @@ set(UTIL_FILES
   string_util.cpp
   thrift_rpc_helper.cpp
   frame_of_reference_coding.cpp
-  monotime.cpp
   thread.cpp
   threadpool.cpp
   trace.cpp
   trace_metrics.cpp
-  timezone_utils.cpp
   int96.cpp
   hdfs_util.cpp
   gc_helper.cpp
