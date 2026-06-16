@@ -34,13 +34,16 @@
 
 package com.starrocks.service;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.Range;
+import com.google.common.collect.RangeMap;
 import com.google.common.collect.Sets;
+import com.google.common.collect.TreeRangeMap;
 import com.starrocks.analysis.LiteralExpr;
 import com.starrocks.analysis.SlotDescriptor;
 import com.starrocks.analysis.SlotId;
@@ -164,6 +167,7 @@ import com.starrocks.sql.ast.AddPartitionClause;
 import com.starrocks.sql.ast.CancelAlterTableStmt;
 import com.starrocks.sql.ast.ListPartitionDesc;
 import com.starrocks.sql.ast.PartitionDesc;
+import com.starrocks.sql.ast.PartitionValue;
 import com.starrocks.sql.ast.RangePartitionDesc;
 import com.starrocks.sql.ast.SetType;
 import com.starrocks.sql.ast.ShowAlterStmt;
@@ -2200,28 +2204,38 @@ public class FrontendServiceImpl implements FrontendService.Iface {
             return result;
         }
 
-        AddPartitionClause addPartitionClause;
+        // Resolve the requested partition values into "values that still need a new partition" vs.
+        // "values already covered by an existing partition (route into it)". This keeps
+        // createPartitionProcess a thin orchestrator; the covering semantics live in
+        // resolveLoadPartitions().
+        LoadPartitionResolution resolution = resolveLoadPartitions(db, olapTable, isTemp, request.partition_values);
+        List<List<String>> partitionValuesToCreate = resolution.valuesToCreate;
+        Set<String> coveringPartitionNames = resolution.coveringPartitionNames;
+
+        AddPartitionClause addPartitionClause = null;
         List<String> partitionColNames = Lists.newArrayList();
-        try (AutoCloseableLock ignore = new AutoCloseableLock(new Locker(), db.getId(), Lists.newArrayList(table.getId()),
-                LockType.READ)) {
-            addPartitionClause = AnalyzerUtils.getAddPartitionClauseFromPartitionValues(olapTable,
-                    request.partition_values, isTemp, partitionNamePrefix);
-            PartitionDesc partitionDesc = addPartitionClause.getPartitionDesc();
-            if (partitionDesc instanceof RangePartitionDesc) {
-                partitionColNames = ((RangePartitionDesc) partitionDesc).getPartitionColNames();
-            } else if (partitionDesc instanceof ListPartitionDesc) {
-                partitionColNames = ((ListPartitionDesc) partitionDesc).getPartitionColNames();
+        if (!partitionValuesToCreate.isEmpty()) {
+            try (AutoCloseableLock ignore = new AutoCloseableLock(new Locker(), db.getId(),
+                    Lists.newArrayList(table.getId()), LockType.READ)) {
+                addPartitionClause = AnalyzerUtils.getAddPartitionClauseFromPartitionValues(olapTable,
+                        partitionValuesToCreate, isTemp, partitionNamePrefix);
+                PartitionDesc partitionDesc = addPartitionClause.getPartitionDesc();
+                if (partitionDesc instanceof RangePartitionDesc) {
+                    partitionColNames = Lists.newArrayList(((RangePartitionDesc) partitionDesc).getPartitionColNames());
+                } else if (partitionDesc instanceof ListPartitionDesc) {
+                    partitionColNames = Lists.newArrayList(((ListPartitionDesc) partitionDesc).getPartitionColNames());
+                }
+                if (olapTable.getNumberOfPartitions() + partitionColNames.size() > Config.max_partition_number_per_table) {
+                    throw new AnalysisException("Table " + olapTable.getName() +
+                            " automatically created partitions exceeded the maximum limit: " +
+                            Config.max_partition_number_per_table + ". You can modify this restriction on by setting" +
+                            " max_partition_number_per_table larger.");
+                }
+            } catch (AnalysisException ex) {
+                errorStatus.setError_msgs(Lists.newArrayList(ex.getMessage()));
+                result.setStatus(errorStatus);
+                return result;
             }
-            if (olapTable.getNumberOfPartitions() + partitionColNames.size() > Config.max_partition_number_per_table) {
-                throw new AnalysisException("Table " + olapTable.getName() +
-                        " automatically created partitions exceeded the maximum limit: " +
-                        Config.max_partition_number_per_table + ". You can modify this restriction on by setting" +
-                        " max_partition_number_per_table larger.");
-            }
-        } catch (AnalysisException ex) {
-            errorStatus.setError_msgs(Lists.newArrayList(ex.getMessage()));
-            result.setStatus(errorStatus);
-            return result;
         }
 
         GlobalStateMgr state = GlobalStateMgr.getCurrentState();
@@ -2243,71 +2257,78 @@ public class FrontendServiceImpl implements FrontendService.Iface {
             return result;
         }
 
-        Set<String> creatingPartitionNames = CatalogUtils.getPartitionNamesFromAddPartitionClause(addPartitionClause);
+        // All requested values are already covered by existing partitions: nothing to create,
+        // just return the covering partitions so BE routes the rows into them.
+        if (addPartitionClause != null) {
+            Set<String> creatingPartitionNames = CatalogUtils.getPartitionNamesFromAddPartitionClause(addPartitionClause);
 
-        try {
-            // creating partition names is ordered
-            for (String partitionName : creatingPartitionNames) {
-                olapTable.lockCreatePartition(partitionName);
-            }
-
-            // if the txn is already create partition failed, we should not create partition again
-            // because create partition failed will cause the txn to be aborted
-            if (txnState.getIsCreatePartitionFailed()) {
-                throw new StarRocksException("automatic create partition failed. error: txn " + request.getTxn_id() +
-                        " already create partition failed");
-            }
-
-            boolean willCreateNewPartition =
-                    CatalogUtils.checkIfNewPartitionExists(olapTable, creatingPartitionNames);
-
-            // ingestion is top priority, if schema change or rollup is running, cancel it
             try {
-                String errMsg = "Alter job conflicts with partition creation, for more details please check "
-                        + "https://docs.starrocks.io/docs/faq/Others#how-can-i-prevent-expression-partition-conflicts"
-                        + "-caused-by-concurrent-execution-of-loading-tasks-and-partition-creation-tasks";
-                if (olapTable.getState() == OlapTable.OlapTableState.ROLLUP && willCreateNewPartition) {
-                    LOG.info("cancel rollup for automatic create partition txn_id={}", request.getTxn_id());
-                    state.getLocalMetastore().cancelAlter(
-                            new CancelAlterTableStmt(
-                                    ShowAlterStmt.AlterType.ROLLUP,
-                                    new TableName(db.getFullName(), olapTable.getName())), errMsg);
+                // creating partition names is ordered
+                for (String partitionName : creatingPartitionNames) {
+                    olapTable.lockCreatePartition(partitionName);
                 }
 
-                if (olapTable.getState() == OlapTable.OlapTableState.SCHEMA_CHANGE && willCreateNewPartition) {
-                    LOG.info("cancel schema change for automatic create partition txn_id={}", request.getTxn_id());
-                    state.getLocalMetastore().cancelAlter(
-                            new CancelAlterTableStmt(
-                                    ShowAlterStmt.AlterType.COLUMN,
-                                    new TableName(db.getFullName(), olapTable.getName())), errMsg);
+                // if the txn is already create partition failed, we should not create partition again
+                // because create partition failed will cause the txn to be aborted
+                if (txnState.getIsCreatePartitionFailed()) {
+                    throw new StarRocksException("automatic create partition failed. error: txn " + request.getTxn_id() +
+                            " already create partition failed");
                 }
+
+                boolean willCreateNewPartition =
+                        CatalogUtils.checkIfNewPartitionExists(olapTable, creatingPartitionNames);
+
+                // ingestion is top priority, if schema change or rollup is running, cancel it
+                try {
+                    String errMsg = "Alter job conflicts with partition creation, for more details please check "
+                            + "https://docs.starrocks.io/docs/faq/Others#how-can-i-prevent-expression-partition-conflicts"
+                            + "-caused-by-concurrent-execution-of-loading-tasks-and-partition-creation-tasks";
+                    if (olapTable.getState() == OlapTable.OlapTableState.ROLLUP && willCreateNewPartition) {
+                        LOG.info("cancel rollup for automatic create partition txn_id={}", request.getTxn_id());
+                        state.getLocalMetastore().cancelAlter(
+                                new CancelAlterTableStmt(
+                                        ShowAlterStmt.AlterType.ROLLUP,
+                                        new TableName(db.getFullName(), olapTable.getName())), errMsg);
+                    }
+
+                    if (olapTable.getState() == OlapTable.OlapTableState.SCHEMA_CHANGE && willCreateNewPartition) {
+                        LOG.info("cancel schema change for automatic create partition txn_id={}", request.getTxn_id());
+                        state.getLocalMetastore().cancelAlter(
+                                new CancelAlterTableStmt(
+                                        ShowAlterStmt.AlterType.COLUMN,
+                                        new TableName(db.getFullName(), olapTable.getName())), errMsg);
+                    }
+                } catch (Exception e) {
+                    LOG.warn("cancel schema change or rollup failed. error: {}", e.getMessage());
+                }
+
+                // If a create partition request is from BE or CN, the warehouse information may be lost, we can get it from txn state.
+                ConnectContext ctx = Util.getOrCreateInnerContext();
+                if (txnState.getWarehouseId() != WarehouseManager.DEFAULT_WAREHOUSE_ID) {
+                    ctx.setCurrentWarehouseId(txnState.getWarehouseId());
+                }
+                try (AutoCloseableLock ignore = new AutoCloseableLock(new Locker(), db.getId(), Lists.newArrayList(table.getId()),
+                        LockType.READ)) {
+                    AlterTableClauseAnalyzer analyzer = new AlterTableClauseAnalyzer(olapTable);
+                    analyzer.analyze(ctx, addPartitionClause);
+                }
+                state.getLocalMetastore().addPartitions(ctx, db, olapTable.getName(), addPartitionClause);
             } catch (Exception e) {
-                LOG.warn("cancel schema change or rollup failed. error: {}", e.getMessage());
+                LOG.warn("failed to add partitions", e);
+                errorStatus.setError_msgs(Lists.newArrayList(
+                        String.format("automatic create partition failed. error:%s", e.getMessage())));
+                result.setStatus(errorStatus);
+                txnState.setIsCreatePartitionFailed(true);
+                return result;
+            } finally {
+                for (String partitionName : creatingPartitionNames) {
+                    olapTable.unlockCreatePartition(partitionName);
+                }
             }
+        } // end if (addPartitionClause != null)
 
-            // If a create partition request is from BE or CN, the warehouse information may be lost, we can get it from txn state.
-            ConnectContext ctx = Util.getOrCreateInnerContext();
-            if (txnState.getWarehouseId() != WarehouseManager.DEFAULT_WAREHOUSE_ID) {
-                ctx.setCurrentWarehouseId(txnState.getWarehouseId());
-            }
-            try (AutoCloseableLock ignore = new AutoCloseableLock(new Locker(), db.getId(), Lists.newArrayList(table.getId()),
-                    LockType.READ)) {
-                AlterTableClauseAnalyzer analyzer = new AlterTableClauseAnalyzer(olapTable);
-                analyzer.analyze(ctx, addPartitionClause);
-            }
-            state.getLocalMetastore().addPartitions(ctx, db, olapTable.getName(), addPartitionClause);
-        } catch (Exception e) {
-            LOG.warn("failed to add partitions", e);
-            errorStatus.setError_msgs(Lists.newArrayList(
-                    String.format("automatic create partition failed. error:%s", e.getMessage())));
-            result.setStatus(errorStatus);
-            txnState.setIsCreatePartitionFailed(true);
-            return result;
-        } finally {
-            for (String partitionName : creatingPartitionNames) {
-                olapTable.unlockCreatePartition(partitionName);
-            }
-        }
+        // Also return existing covering partitions so BE adds them and routes rows into them.
+        partitionColNames.addAll(coveringPartitionNames);
 
         // build partition & tablets
         List<TOlapTablePartition> partitions = Lists.newArrayList();
@@ -2337,6 +2358,106 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         } finally {
             locker.unLockTablesWithIntensiveDbLock(db.getId(), Lists.newArrayList(olapTable.getId()), LockType.READ);
         }
+    }
+
+    /**
+     * Result of resolving load partition values: which values still need a new partition created,
+     * and which existing partitions already cover the rest (so BE can route rows into them).
+     */
+    @VisibleForTesting
+    static final class LoadPartitionResolution {
+        final List<List<String>> valuesToCreate;
+        final Set<String> coveringPartitionNames;
+
+        @VisibleForTesting
+        LoadPartitionResolution(List<List<String>> valuesToCreate, Set<String> coveringPartitionNames) {
+            this.valuesToCreate = valuesToCreate;
+            this.coveringPartitionNames = coveringPartitionNames;
+        }
+    }
+
+    /**
+     * For an auto/expression range-partitioned table, split the requested partition values into:
+     *  - valuesToCreate: values without a covering partition that need a new one (original behavior);
+     *  - coveringPartitionNames: existing partitions whose range already contains the value, so the
+     *    rows can be routed into them instead of creating an overlapping (e.g. day-vs-month) partition.
+     *
+     * This generalizes the existing name-based "if-not-exists -> reuse" behavior to range coverage,
+     * which is what lets a day-partitioned table keep accepting backdated writes after some history
+     * has been merged into coarser (month) partitions via ALTER TABLE ... OPTIMIZE.
+     *
+     * Gated by Config.enable_auto_partition_route_into_covering_partition; only applies to non-temp,
+     * single-column range/expression partitioned tables. On any failure it falls back to the original
+     * behavior (create all values), so it never makes loads worse.
+     */
+    @VisibleForTesting
+    static LoadPartitionResolution resolveLoadPartitions(Database db, OlapTable olapTable, boolean isTemp,
+                                                                 List<List<String>> partitionValues) {
+        PartitionInfo partitionInfo = olapTable.getPartitionInfo();
+        if (!Config.enable_auto_partition_route_into_covering_partition
+                || isTemp || !partitionInfo.isRangePartition()
+                || olapTable.getPartitionColumnNames().size() != 1) {
+            return new LoadPartitionResolution(partitionValues, Sets.newLinkedHashSet());
+        }
+        try (AutoCloseableLock ignore = new AutoCloseableLock(new Locker(), db.getId(),
+                Lists.newArrayList(olapTable.getId()), LockType.READ)) {
+            RangePartitionInfo rangePartitionInfo = (RangePartitionInfo) partitionInfo;
+            Column partitionColumn = rangePartitionInfo.getPartitionColumns(olapTable.getIdToColumn()).get(0);
+            // Build a range map of existing formal partitions once for O(log n) lookups.
+            RangeMap<PartitionKey, Long> rangeMap = TreeRangeMap.create();
+            for (Map.Entry<Long, Range<PartitionKey>> e : rangePartitionInfo.getIdToRange(false).entrySet()) {
+                rangeMap.put(e.getValue(), e.getKey());
+            }
+            List<List<String>> valuesToCreate = Lists.newArrayList();
+            Set<String> coveringPartitionNames = Sets.newLinkedHashSet();
+            for (List<String> value : partitionValues) {
+                String covering = findCoveringPartitionName(olapTable, partitionColumn, rangeMap, value);
+                if (covering != null) {
+                    coveringPartitionNames.add(covering);
+                } else {
+                    valuesToCreate.add(value);
+                }
+            }
+            return new LoadPartitionResolution(valuesToCreate, coveringPartitionNames);
+        } catch (Exception ex) {
+            // On any failure, fall back to the original behavior (create all values as usual).
+            LOG.warn("resolve covering partition failed for table {}, fallback to auto create: {}",
+                    olapTable.getName(), ex.getMessage());
+            return new LoadPartitionResolution(partitionValues, Sets.newLinkedHashSet());
+        }
+    }
+
+    /**
+     * For an auto/expression range-partitioned table, find an existing partition whose range
+     * already contains the given single-column partition value (mirrors BE's range-contains
+     * routing). Returns the covering partition name, or null if no existing partition covers it
+     * (in which case a new partition should be created as usual).
+     */
+    @VisibleForTesting
+    static String findCoveringPartitionName(OlapTable olapTable, Column partitionColumn,
+                                                    RangeMap<PartitionKey, Long> rangeMap,
+                                                    List<String> value) {
+        if (value == null || value.size() != 1) {
+            return null;
+        }
+        String item = value.get(0);
+        if (item == null || "NULL".equalsIgnoreCase(item)) {
+            return null;
+        }
+        try {
+            PartitionKey key = PartitionKey.createPartitionKey(
+                    Lists.newArrayList(new PartitionValue(item)), Lists.newArrayList(partitionColumn));
+            Long partitionId = rangeMap.get(key);
+            if (partitionId != null) {
+                Partition partition = olapTable.getPartition(partitionId);
+                if (partition != null) {
+                    return partition.getName();
+                }
+            }
+        } catch (Exception e) {
+            LOG.debug("findCoveringPartitionName failed for value {}: {}", item, e.getMessage());
+        }
+        return null;
     }
 
     private static TCreatePartitionResult buildCreatePartitionResponse(OlapTable olapTable,
