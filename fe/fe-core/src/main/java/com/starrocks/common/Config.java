@@ -2534,6 +2534,17 @@ public class Config extends ConfigBase {
     public static long max_partition_number_per_table = 100000;
 
     /**
+     * For expression(auto) partition tables, when a load value is not covered by an exact
+     * partition but is already covered by an existing coarser partition (e.g. after merging
+     * day partitions into a month partition via ALTER TABLE OPTIMIZE), route the rows into
+     * that existing covering partition instead of failing with "Range ... is intersected".
+     * This lets a day-partitioned table keep accepting backdated writes that fall into a
+     * merged month partition. Set to false to restore the original strict behavior.
+     */
+    @ConfField(mutable = true)
+    public static boolean enable_auto_partition_route_into_covering_partition = true;
+
+    /**
      * Used to limit num of partition for load open partition number
      */
     @ConfField(mutable = true)
