@@ -1,0 +1,436 @@
+stages:
+  - test
+  - build
+  - deploy
+  - integration
+  - restart
+  - admit
+  - teardown
+
+workflow:
+  rules:
+    # 合并请求流水线（对应 GitHub 的 pull_request）
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: always
+    # 分支 push（对应 GitHub 的 push）
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"'
+      when: always
+    # 手动触发
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+      when: always
+
+default:
+  timeout: 3h
+  tags:
+    - hk
+  image: starrocks/dev-env-ubuntu:3.3.16
+  interruptible: true
+  cache:
+    - key: "maven-cache"
+      paths:
+        - .m2/repository/
+      policy: pull-push
+    - key: "ccache-${CI_COMMIT_REF_SLUG}"
+      paths:
+        - ${CI_PROJECT_DIR}/.ccache/
+      policy: pull-push
+  before_script:
+    # 设置环境变量
+    - export PR_NUMBER="${CI_MERGE_REQUEST_IID:-${CI_PIPELINE_IID}}"
+    - export BRANCH="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-${CI_COMMIT_BRANCH}}"
+    - export CODE_PATH="${CI_PROJECT_DIR}"
+
+    # 显示当前状态
+    - echo "Current branch:" ${CI_COMMIT_BRANCH}
+    - echo "Current commit:" ${CI_COMMIT_SHA}
+    - echo "Working directory:" ${CI_PROJECT_DIR}
+
+variables:
+  RUNNER_SCRIPT_TIMEOUT: 3h
+  # 使用GitLab默认的Git策略
+  GIT_STRATEGY: fetch
+  # 编译提速
+  CCACHE_DIR: "${CI_PROJECT_DIR}/.ccache"
+  CCACHE_MAXSIZE: "30G"
+  MAVEN_OPTS: "-Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository"
+  # 保持完整历史记录
+  GIT_DEPTH: "0"
+  GIT_SUBMODULE_STRATEGY: recursive
+
+# ===== TEST STAGE =====
+be-ut:
+  stage: test
+  timeout: 3h
+  variables:
+    KUBERNETES_CPU_REQUEST: "60"
+    KUBERNETES_CPU_LIMIT: "60"
+    KUBERNETES_MEMORY_REQUEST: "120Gi"
+    KUBERNETES_MEMORY_LIMIT: "120Gi"
+  cache:
+    - key: "ccache-${CI_COMMIT_REF_SLUG}"
+      paths:
+        - ${CI_PROJECT_DIR}/.ccache/
+      policy: pull-push
+  script:
+    - export STARROCKS_HOME=${CI_PROJECT_DIR}
+    - export BE_UT_PARALLEL=16
+
+    - mkdir -p ${CI_PROJECT_DIR}/log
+    - mkdir -p ${CI_PROJECT_DIR}/.ccache
+    - mkdir -p /root/.cache
+    - export DEBIAN_FRONTEND=noninteractive
+    - export "GTEST_PARALLEL_OPTIONS=-w 30 -d ${CI_PROJECT_DIR}/log --timeout_per_test 300"
+    - export BUILD_JAVA_EXT=ON
+    - apt update
+    - apt install -y pigz
+    - update-alternatives --install /usr/bin/ld ld /usr/bin/lld-14 1000
+    - ld -v
+    # 配置 gtest-parallel
+    - git clone https://github.com/google/gtest-parallel.git ${CI_PROJECT_DIR}/gtest-parallel
+    - chmod +x ${CI_PROJECT_DIR}/gtest-parallel/gtest-parallel
+    - export GTEST_PARALLEL=${CI_PROJECT_DIR}/gtest-parallel/gtest-parallel
+
+    # 配置 ccache
+    - ccache -M 30G
+    - ccache --set-config=cache_dir=${CI_PROJECT_DIR}/.ccache
+    - ccache --zero-stats
+
+    # 配置对象存储相关环境变量（用于测试）
+    - echo 'object_storage_access_key_id = minioadmin' >> ~/.starrocks_config
+    - echo 'object_storage_secret_access_key = minioadmin' >> ~/.starrocks_config
+    - echo 'object_storage_endpoint = http://127.0.0.1:9000' >> ~/.starrocks_config
+    - echo 'object_storage_bucket = starrocks-fs-s3-ut' >> ~/.starrocks_config
+
+    # 设置构建环境变量
+    - export STARROCKS_VERSION=$BRANCH
+    - export BUILD_TYPE=Release
+    - export STARROCKS_HOME=${CI_PROJECT_DIR}
+    - source env.sh
+
+    - echo "Running BE Unit Tests"
+    - timeout 5400 ./run-be-ut.sh -j $(nproc) --gtest_filter=-BrpcStubCacheTest.test_cleanup:BrpcStubCacheTest.test_lake_cleanup:BrpcStubCacheTest.test_http_cleanup
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: on_success
+
+fe-ut:
+  stage: test
+  timeout: 3h
+  variables:
+    FE_UT_PARALLEL: "16"
+    KUBERNETES_CPU_REQUEST: "30"
+    KUBERNETES_CPU_LIMIT: "30"
+    KUBERNETES_MEMORY_REQUEST: "60Gi"
+    KUBERNETES_MEMORY_LIMIT: "60Gi"
+  script:
+    # 设置环境变量
+    - |
+      fe_filter='--filter com.starrocks.epack.authentication.SecurityIntegrationTest#testSecurityIntegrationDdlPersist,com.starrocks.analysis.ShowProcesslistStmtTest#testSuccess,com.starrocks.load.loadv2.BrokerLoadJobTest#testCommitRateExceeded,com.starrocks.server.ConcurrentDDLTest#testConcurrentlyDropDbAndCreateTable,com.starrocks.http.TransactionLoadActionOnSharedDataClusterTest#beginTransactionWithoutChannelInfoTest,com.starrocks.analysis.SetWarehouseStmtTest#testSetWarehouse,com.starrocks.http.TransactionLoadActionOnSharedDataClusterTest#transactionLoadCoordinatorMgrMultiBeOnSameNodeWithoutChannelTest,com.starrocks.http.TransactionLoadActionOnSharedDataClusterTest#transactionLoadCoordinatorMgrOneBeOnNodeWithoutChannelTest,com.starrocks.http.TransactionLoadActionOnSharedDataClusterTest#transactionLoadCoordinatorMgrWithoutChannelTest,com.starrocks.transaction.LakePublishBatchTest#testPublishTransactionState,com.starrocks.transaction.LakePublishBatchTest#testTransfromSingleToBatch,com.starrocks.transaction.LakePublishBatchTest#testTransformBatchToSingle,com.starrocks.statistic.CacheRelaxDictManagerTest,com.starrocks.alter.LakeSyncMaterializedViewTest#testCreateSyncMV_WithLowerColumn,com.starrocks.alter.LakeSyncMaterializedViewTest#testMaterializedViews,com.starrocks.catalog.CatalogRecycleBinLakeTableTest#testRecycleLakeDatabase(LakeService),com.starrocks.planner.TablePruningTest#testPermuteFromClausesRandomlyAndMoveOnJoinPredicatesToWhereClauses,com.starrocks.backup.BackupHandlerTest#testCreateAndDropRepository,com.starrocks.transaction.LakePublishBatchTest#testBatchPublishReplicationTransaction,com.starrocks.transaction.LakePublishBatchTest#testNormal,com.starrocks.sql.dump.QueryDumpRegressionTest,com.starrocks.sql.dump.QueryDumpCaseRewriter'
+
+    # 调整内存配置
+    - sed -i 's#4096#3072#g' fe/fe-core/pom.xml
+    - sed -i 's#2.22.2#3.5.3#g' fe/fe-core/pom.xml
+
+    # 运行 FE 单元测试
+    - echo "::group::FE UT LOG"
+    - |
+      export STARROCKS_HOME=${CI_PROJECT_DIR}
+      echo "Running FE Unit Tests with parallel: $FE_UT_PARALLEL"
+      timeout 4000 ./run-fe-ut.sh ${fe_filter}
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: on_success
+
+# ===== BUILD STAGE =====
+build:
+  stage: build
+  timeout: 120 minutes
+  variables:
+    KUBERNETES_CPU_REQUEST: "60"
+    KUBERNETES_CPU_LIMIT: "60"
+    KUBERNETES_MEMORY_REQUEST: "120Gi"
+    KUBERNETES_MEMORY_LIMIT: "120Gi"
+  needs:
+    - fe-ut
+    - be-ut
+  script:
+    # 配置编译环境
+    - export DEBIAN_FRONTEND=noninteractive
+    - apt update
+    - apt install -y pigz
+
+    # 配置 ccache
+    - ccache -M 30G
+    - ccache --set-config=cache_dir=${CI_PROJECT_DIR}/.ccache
+    - ccache --zero-stats
+
+    # 配置对象存储相关环境变量
+    - echo 'object_storage_access_key_id = minioadmin' >> ~/.starrocks_config
+    - echo 'object_storage_secret_access_key = minioadmin' >> ~/.starrocks_config
+    - echo 'object_storage_endpoint = http://127.0.0.1:9000' >> ~/.starrocks_config
+    - echo 'object_storage_bucket = starrocks-fs-s3-ut' >> ~/.starrocks_config
+
+    # 设置构建环境变量
+    - export STARROCKS_VERSION=$BRANCH
+    - export BUILD_TYPE=Release
+    - export STARROCKS_HOME=${CI_PROJECT_DIR}
+    - source env.sh
+
+    # 完整构建 BE 和 FE，目前不考虑第三方依赖变更的增量构建
+    - ./build.sh --be --fe --with-gcov --enable-shared-data -j $(nproc)
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: on_success
+  artifacts:
+    expire_in: 3 days
+    paths:
+      - output/
+
+# ===== DOCKER BUILD STAGE =====
+docker-build:
+  stage: build
+  image:
+    name: moby/buildkit:rootless
+    entrypoint: [ "" ]
+  variables:
+    KUBERNETES_CPU_REQUEST: "8"
+    KUBERNETES_CPU_LIMIT: "8"
+    KUBERNETES_MEMORY_REQUEST: "16Gi"
+    KUBERNETES_MEMORY_LIMIT: "16Gi"
+    BUILDKITD_FLAGS: --oci-worker-no-process-sandbox
+  cache: []
+  needs:
+    - job: build
+      artifacts: true
+  before_script:
+    - mkdir -p ~/.docker
+    - echo "{\"auths\":{\"$DOCKER_REGISTRY_URL\":{\"username\":\"$DOCKER_REGISTRY_USER\",\"password\":\"$DOCKER_REGISTRY_PASSWORD\"}}}" > ~/.docker/config.json
+  script:
+    # 设置镜像标签
+    - |
+      IMAGE_TAG="${CI_COMMIT_SHORT_SHA}"
+      echo "IMAGE_TAG=${IMAGE_TAG}" >> job.env
+      echo "Building Docker image with tag: ${IMAGE_TAG}"
+
+    - |
+      buildctl-daemonless.sh build \
+        --frontend dockerfile.v0 \
+        --local context=. \
+        --local dockerfile=. \
+        --opt filename=docker/dockerfiles/allin1/allin1-ubuntu.Dockerfile \
+        --opt platform=linux/amd64,linux/arm64 \
+        --output type=image,name=${DOCKER_REGISTRY_URL}/bigdata/starrocks/allin1-ubuntu:${IMAGE_TAG},push=true
+      
+      echo "Docker image pushed: ${DOCKER_REGISTRY_URL}/bigdata/starrocks/allin1-ubuntu:${IMAGE_TAG}"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: on_success
+  artifacts:
+    expire_in: 1 day
+    reports:
+      dotenv: job.env
+
+#deploy:
+#  stage: deploy
+#  needs:
+#    - build
+#  script:
+#    - |
+#      rm -rf ./ci-tool && cp -rf /var/lib/ci-tool ./ci-tool && cd ci-tool && git pull && source lib/init.sh
+#      cluster_type=$(./bin/choose-mode.sh)
+#      if [[ "${cluster_type}" == "cloud" ]]; then
+#        echo "SHARED_DATA=true" >> job.env
+#        CLUSTER_NAME="ci-admit-cloud"
+#      else
+#        echo "SHARED_DATA=false" >> job.env
+#        CLUSTER_NAME="ci-admit"
+#      fi
+#
+#      # 申请资源
+#      ./bin/elastic-cluster.sh --template ci-admit
+#      cp conf/starrocks_deploy.conf /var/local/env/${PR_NUMBER}-starrocks_deploy.conf
+#      echo "DEPLOY_CONF_FILE=/var/local/env/${PR_NUMBER}-starrocks_deploy.conf" >> job.env
+#
+#      # 部署 StarRocks
+#      if [[ "$IS_SELF_BUILD" == 'true' ]]; then
+#        deploy_path="${CI_PROJECT_DIR}/output"
+#      else
+#        deploy_path="${CI_PROJECT_DIR}/output"
+#      fi
+#
+#      echo "##### Deploy path: ${deploy_path}"
+#      echo "CLUSTER_NAME=${CLUSTER_NAME}" >> job.env
+#      ./bin/deploy-cluster.sh -c ${CLUSTER_NAME} --output ${deploy_path} --with-coverage
+#
+#      # 输出集群信息
+#      echo "FE=${fe}" >> job.env
+#      echo "BE=${be}" >> job.env
+#      echo "BE_LIST=${be_list}" >> job.env
+#  rules:
+#    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+#      when: on_success
+#  artifacts:
+#    expire_in: 1 day
+#    reports:
+#      dotenv: job.env
+
+# ===== INTEGRATION STAGE =====
+#sql-tester:
+#  stage: integration
+#  tags:
+#    - starrocks-normal
+#  timeout: 60 minutes
+#  needs:
+#    - build
+#    - deploy
+#  script:
+#    - rm -rf ${CI_PROJECT_DIR}/*
+#    - git clone ${CI_REPOSITORY_URL} .
+#    - git config --global user.name "gitlab-ci"
+#    - git config --global user.email "ci@starrocks.com"
+#    - git checkout $BRANCH
+#    - BASE_VERSION=$(cat base_version.txt)
+#    - git reset ${BASE_VERSION} --hard || true
+#    - BRANCH_NAME="${BRANCH}-${PR_NUMBER}"
+#    - git fetch origin merge-requests/${CI_MERGE_REQUEST_IID}/head:${BRANCH_NAME}
+#    - git checkout $BRANCH_NAME
+#    - git checkout -b merge_pr
+#    - git merge --squash --no-edit ${BRANCH} || (echo "Merge conflict, please check." && exit 1)
+#    - |
+#      rm -rf ./ci-tool && cp -rf /var/lib/ci-tool ./ci-tool && cd ci-tool && git pull && source lib/init.sh
+#      ./bin/run-sql-tester.sh
+#      echo "MYSQL_ECI_ID=${MYSQL_ECI_ID}" >> job.env
+#    - |
+#      # 上传测试结果
+#      repo_lower=$(echo ${CI_PROJECT_NAMESPACE} | tr '[:upper:]' '[:lower:]')
+#      ossutil64 --config-file ~/.ossutilconfig rm oss://${repo_lower}-ci-release/$BRANCH/Release/pr/SQL-Tester-XML/${PR_NUMBER}/ -rf
+#      ossutil64 --config-file ~/.ossutilconfig cp test/ oss://${repo_lower}-ci-release/$BRANCH/Release/pr/SQL-Tester-XML/${PR_NUMBER}/ --include "*.xml" --recursive --force --tagging="type=ci"
+#  rules:
+#    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+#      when: on_success
+#  artifacts:
+#    expire_in: 1 day
+#    when: always
+#    paths:
+#      - test/log/
+#      - test/crash_logs/
+#    reports:
+#      dotenv: job.env
+#  after_script:
+#    - rm -rf ${CI_PROJECT_DIR}/*
+
+# ===== RESTART STAGE =====
+#restart-fe:
+#  stage: restart
+#  tags:
+#    - starrocks-normal
+#  needs:
+#    - deploy
+#    - sql-tester
+#  script:
+#    - rm -rf ${CI_PROJECT_DIR}/*
+#    - |
+#      rm -rf ./ci-tool && cp -rf /var/lib/ci-tool ./ci-tool && cd ci-tool && git pull && source lib/init.sh
+#      ./bin/restart-fe.sh --pr ${PR_NUMBER} --branch ${BRANCH} --build Release --repository ${CI_PROJECT_PATH}
+#  rules:
+#    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+#      when: on_success
+#  after_script:
+#    - rm -rf ${CI_PROJECT_DIR}/*
+
+#restart-be:
+#  stage: restart
+#  tags:
+#    - starrocks-normal
+#  timeout: 20 minutes
+#  needs:
+#    - deploy
+#    - sql-tester
+#  script:
+#    - rm -rf ${CI_PROJECT_DIR}/*
+#    - |
+#      rm -rf ./ci-tool && cp -rf /var/lib/ci-tool ./ci-tool && cd ci-tool && git pull && source lib/init.sh
+#      skip_gcov=""
+#      [[ "$IS_SELF_BUILD" != "true" ]] && skip_gcov="--skip-gcov"
+#      ./bin/system-cov-be.sh --pr ${PR_NUMBER} --branch ${BRANCH} --build Release --repository ${CI_PROJECT_PATH} ${skip_gcov}
+#  rules:
+#    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+#      when: on_success
+#  after_script:
+#    - rm -rf ${CI_PROJECT_DIR}/*
+
+# ===== ADMIT STAGE =====
+#admit:
+#  stage: admit
+#  tags:
+#    - starrocks-normal
+#  timeout: 40 minutes
+#  needs:
+#    - deploy
+#    - restart-fe
+#    - restart-be
+#  script:
+#    - rm -rf ${CI_PROJECT_DIR}/*
+#    - |
+#      rm -rf ./ci-tool && cp -rf /var/lib/ci-tool ./ci-tool && cd ci-tool && git pull && source lib/init.sh
+#
+#      cd ${CI_PROJECT_DIR}
+#      rm -rf ./StarRocksTest && cp -rf /var/lib/StarRocksTest ./StarRocksTest && cd ./StarRocksTest && git pull >/dev/null
+#
+#      cd ${CI_PROJECT_DIR}/ci-tool
+#      if [[ "$SHARED_DATA" == "true" ]]; then
+#          cluster_type=cloud
+#      else
+#          cluster_type=native
+#      fi
+#      ./bin/run-admit-single.sh --pr ${PR_NUMBER} --branch ${BRANCH} --build Release --repository ${CI_PROJECT_PATH} --cluster ${cluster_type}
+#
+#    - |
+#      # 上传测试结果
+#      repo_lower=$(echo ${CI_PROJECT_NAMESPACE} | tr '[:upper:]' '[:lower:]')
+#      ossutil64 --config-file ~/.ossutilconfig rm oss://${repo_lower}-ci-release/$BRANCH/Release/pr/Admit-XML/${PR_NUMBER}/ -rf
+#      ossutil64 --config-file ~/.ossutilconfig cp StarRocksTest/result oss://${repo_lower}-ci-release/$BRANCH/Release/pr/Admit-XML/${PR_NUMBER}/ --include "*.xml" --recursive --force --tagging="type=ci"
+#  rules:
+#    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+#      variables:
+#        IS_SELF_BUILD: "true"
+#      when: on_success
+#  after_script:
+#    - rm -rf ${CI_PROJECT_DIR}/*
+
+# ===== TEARDOWN STAGE =====
+#teardown:
+#  stage: teardown
+#  tags:
+#    - starrocks-quick
+#  needs:
+#    - deploy
+#    - sql-tester
+#    - admit
+#  script:
+#    - echo $PR_NUMBER > pr_num.txt
+#    - |
+#      if [[ -n "$DEPLOY_CONF_FILE" ]]; then
+#        rm -rf ./ci-tool && cp -rf /var/lib/ci-tool ./ci-tool && cd ci-tool && git pull && source lib/init.sh
+#        ./bin/backup_log_cores.sh --branch $BRANCH --pr $PR_NUMBER --build Release --conf $DEPLOY_CONF_FILE --repository ${CI_PROJECT_PATH}
+#
+#        # 清理 ECS
+#        ./bin/elastic-cluster.sh --delete
+#        rm -f $DEPLOY_CONF_FILE
+#      fi
+#
+#      # 清理 ECI
+#      if [[ -n "$MYSQL_ECI_ID" ]]; then
+#        eci rm $MYSQL_ECI_ID
+#      fi
+#  rules:
+#    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+#      when: always
+#  artifacts:
+#    expire_in: 3 days
+#    paths:
+#      - pr_num.txt
+#  after_script:
+#    - rm -rf ${CI_PROJECT_DIR}/*
+
+
