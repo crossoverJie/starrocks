@@ -82,7 +82,8 @@ be-ut:
     - export "GTEST_PARALLEL_OPTIONS=-w 30 -d ${CI_PROJECT_DIR}/log --timeout_per_test 300"
     - export BUILD_JAVA_EXT=ON
     - apt update
-    - apt install -y pigz
+    - apt install -y pigz openjdk-17-jdk
+    - export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
     - update-alternatives --install /usr/bin/ld ld /usr/bin/lld-14 1000
     - ld -v
     # 配置 gtest-parallel
@@ -106,6 +107,7 @@ be-ut:
     - export BUILD_TYPE=Release
     - export STARROCKS_HOME=${CI_PROJECT_DIR}
     - source env.sh
+    - export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 
     - echo "Running BE Unit Tests"
     - timeout 5400 ./run-be-ut.sh -j $(nproc) --gtest_filter=-BrpcStubCacheTest.test_cleanup:BrpcStubCacheTest.test_lake_cleanup:BrpcStubCacheTest.test_http_cleanup
@@ -157,7 +159,8 @@ build:
     # 配置编译环境
     - export DEBIAN_FRONTEND=noninteractive
     - apt update
-    - apt install -y pigz
+    - apt install -y pigz openjdk-17-jdk
+    - export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 
     # 配置 ccache
     - ccache -M 30G
@@ -175,6 +178,7 @@ build:
     - export BUILD_TYPE=Release
     - export STARROCKS_HOME=${CI_PROJECT_DIR}
     - source env.sh
+    - export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 
     # 完整构建 BE 和 FE，目前不考虑第三方依赖变更的增量构建
     - ./build.sh --be --fe --with-gcov --enable-shared-data -j $(nproc)
