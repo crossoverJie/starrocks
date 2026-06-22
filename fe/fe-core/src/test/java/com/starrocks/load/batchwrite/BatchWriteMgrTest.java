@@ -14,6 +14,7 @@
 
 package com.starrocks.load.batchwrite;
 
+import com.starrocks.common.Config;
 import com.starrocks.load.streamload.StreamLoadKvParams;
 import com.starrocks.thrift.TStatusCode;
 import mockit.Expectations;
@@ -118,6 +119,7 @@ public class BatchWriteMgrTest extends BatchWriteTestBase {
 
     @Test
     public void testCheckParameters() {
+        Config.enable_rollback_default_warehouse = false;
         StreamLoadKvParams params1 = new StreamLoadKvParams(new HashMap<>());
         RequestCoordinatorBackendResult result1 =
                 batchWriteMgr.requestCoordinatorBackends(tableId1, params1);

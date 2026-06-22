@@ -15,6 +15,9 @@ workflow:
     # 分支 push（对应 GitHub 的 push）
     - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"'
       when: always
+    # Tag 推送（用于构建 fe-ubuntu 镜像）
+    - if: '$CI_COMMIT_TAG'
+      when: always
     # 手动触发
     - if: '$CI_PIPELINE_SOURCE == "web"'
       when: always
@@ -473,4 +476,68 @@ docker-build:
 #  after_script:
 #    - rm -rf ${CI_PROJECT_DIR}/*
 
+# ===== FE-UBUNTU IMAGE BUILD (Tag-based) =====
+fe-build:
+  stage: build
+  tags:
+    - hk
+  variables:
+    KUBERNETES_CPU_REQUEST: "16"
+    KUBERNETES_CPU_LIMIT: "16"
+    KUBERNETES_MEMORY_REQUEST: "32Gi"
+    KUBERNETES_MEMORY_LIMIT: "32Gi"
+  cache:
+    - key: "maven-cache"
+      paths:
+        - .m2/repository/
+      policy: pull-push
+  before_script:
+    - apt update -qq
+    - apt install -y -qq openjdk-17-jdk > /dev/null
+    - export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+  script:
+    - echo "Building starrocks-fe.jar..."
+    - export MAVEN_OPTS="-Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository"
+    - cd fe && mvn package -DskipTests -pl fe-core -am
+    - mkdir -p ${CI_PROJECT_DIR}/docker/fe-ubuntu
+    - cp fe-core/target/starrocks-fe.jar ${CI_PROJECT_DIR}/docker/fe-ubuntu/starrocks-fe.jar
+    - echo "starrocks-fe.jar built successfully"
+  rules:
+    - if: $CI_COMMIT_TAG
+  artifacts:
+    expire_in: 1 day
+    paths:
+      - docker/fe-ubuntu/starrocks-fe.jar
 
+fe-image:
+  image:
+    name: moby/buildkit:rootless
+    entrypoint: [""]
+  stage: build
+  tags:
+    - hk
+  variables:
+    BUILDKITD_FLAGS: --oci-worker-no-process-sandbox
+  cache: []
+  needs:
+    - job: fe-build
+      artifacts: true
+  before_script:
+    - mkdir -p ~/.docker
+    - echo "{\"auths\":{\"${DOCKER_REGISTRY_URL}\":{\"username\":\"${DOCKER_REGISTRY_USER}\",\"password\":\"${DOCKER_REGISTRY_PASSWORD}\"}}}" > ~/.docker/config.json
+  script:
+    - |
+      if echo "${CI_COMMIT_TAG}" | grep -q '^bigdata'; then
+        IMAGE_NAME=harbor-tx.ypsx-internal.com/bigdata/starrocks/fe-ubuntu:${CI_COMMIT_TAG}
+      else
+        IMAGE_NAME=harbor-tx.ypsx-internal.com/chenjie/fe-ubuntu:${CI_COMMIT_TAG}
+      fi
+    - echo "Building fe-ubuntu image: ${IMAGE_NAME}"
+    - buildctl-daemonless.sh build
+      --frontend dockerfile.v0
+      --local context=${CI_PROJECT_DIR}/docker/fe-ubuntu
+      --local dockerfile=${CI_PROJECT_DIR}/docker/fe-ubuntu
+      --output type=image,name=${IMAGE_NAME},push=true
+    - echo "Docker image pushed: ${IMAGE_NAME}"
+  rules:
+    - if: $CI_COMMIT_TAG

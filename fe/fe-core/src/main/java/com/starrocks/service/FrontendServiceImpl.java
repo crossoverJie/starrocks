@@ -2257,8 +2257,40 @@ public class FrontendServiceImpl implements FrontendService.Iface {
             return result;
         }
 
-        // All requested values are already covered by existing partitions: nothing to create,
-        // just return the covering partitions so BE routes the rows into them.
+        // if the txn is already create partition failed, we should not create partition again
+        // because create partition failed will cause the txn to be aborted
+        if (txnState.getIsCreatePartitionFailed()) {
+            errorStatus.setError_msgs(Lists.newArrayList(
+                    "automatic create partition failed. error: txn " + request.getTxn_id() +
+                    " already create partition failed"));
+            result.setStatus(errorStatus);
+            return result;
+        }
+
+        // ingestion is top priority, if schema change or rollup is running, cancel it
+        try {
+            String errMsg = "Alter job conflicts with partition creation, for more details please check "
+                    + "https://docs.starrocks.io/docs/faq/Others#how-can-i-prevent-expression-partition-conflicts"
+                    + "-caused-by-concurrent-execution-of-loading-tasks-and-partition-creation-tasks";
+            if (olapTable.getState() == OlapTable.OlapTableState.ROLLUP) {
+                LOG.info("cancel rollup for automatic create partition txn_id={}", request.getTxn_id());
+                state.getLocalMetastore().cancelAlter(
+                        new CancelAlterTableStmt(
+                                ShowAlterStmt.AlterType.ROLLUP,
+                                new TableName(db.getFullName(), olapTable.getName())), errMsg);
+            }
+
+            if (olapTable.getState() == OlapTable.OlapTableState.SCHEMA_CHANGE) {
+                LOG.info("cancel schema change for automatic create partition txn_id={}", request.getTxn_id());
+                state.getLocalMetastore().cancelAlter(
+                        new CancelAlterTableStmt(
+                                ShowAlterStmt.AlterType.COLUMN,
+                                new TableName(db.getFullName(), olapTable.getName())), errMsg);
+            }
+        } catch (Exception e) {
+            LOG.warn("cancel schema change or rollup failed. error: {}", e.getMessage());
+        }
+
         if (addPartitionClause != null) {
             Set<String> creatingPartitionNames = CatalogUtils.getPartitionNamesFromAddPartitionClause(addPartitionClause);
 
@@ -2266,40 +2298,6 @@ public class FrontendServiceImpl implements FrontendService.Iface {
                 // creating partition names is ordered
                 for (String partitionName : creatingPartitionNames) {
                     olapTable.lockCreatePartition(partitionName);
-                }
-
-                // if the txn is already create partition failed, we should not create partition again
-                // because create partition failed will cause the txn to be aborted
-                if (txnState.getIsCreatePartitionFailed()) {
-                    throw new StarRocksException("automatic create partition failed. error: txn " + request.getTxn_id() +
-                            " already create partition failed");
-                }
-
-                boolean willCreateNewPartition =
-                        CatalogUtils.checkIfNewPartitionExists(olapTable, creatingPartitionNames);
-
-                // ingestion is top priority, if schema change or rollup is running, cancel it
-                try {
-                    String errMsg = "Alter job conflicts with partition creation, for more details please check "
-                            + "https://docs.starrocks.io/docs/faq/Others#how-can-i-prevent-expression-partition-conflicts"
-                            + "-caused-by-concurrent-execution-of-loading-tasks-and-partition-creation-tasks";
-                    if (olapTable.getState() == OlapTable.OlapTableState.ROLLUP && willCreateNewPartition) {
-                        LOG.info("cancel rollup for automatic create partition txn_id={}", request.getTxn_id());
-                        state.getLocalMetastore().cancelAlter(
-                                new CancelAlterTableStmt(
-                                        ShowAlterStmt.AlterType.ROLLUP,
-                                        new TableName(db.getFullName(), olapTable.getName())), errMsg);
-                    }
-
-                    if (olapTable.getState() == OlapTable.OlapTableState.SCHEMA_CHANGE && willCreateNewPartition) {
-                        LOG.info("cancel schema change for automatic create partition txn_id={}", request.getTxn_id());
-                        state.getLocalMetastore().cancelAlter(
-                                new CancelAlterTableStmt(
-                                        ShowAlterStmt.AlterType.COLUMN,
-                                        new TableName(db.getFullName(), olapTable.getName())), errMsg);
-                    }
-                } catch (Exception e) {
-                    LOG.warn("cancel schema change or rollup failed. error: {}", e.getMessage());
                 }
 
                 // If a create partition request is from BE or CN, the warehouse information may be lost, we can get it from txn state.
@@ -2414,7 +2412,7 @@ public class FrontendServiceImpl implements FrontendService.Iface {
                 String covering = findCoveringPartitionName(olapTable, partitionColumn, rangeMap, value);
                 if (covering != null) {
                     coveringPartitionNames.add(covering);
-                } else {
+                } else if (!isNullPartitionValue(value)) {
                     valuesToCreate.add(value);
                 }
             }
@@ -2425,6 +2423,14 @@ public class FrontendServiceImpl implements FrontendService.Iface {
                     olapTable.getName(), ex.getMessage());
             return new LoadPartitionResolution(partitionValues, Sets.newLinkedHashSet());
         }
+    }
+
+    private static boolean isNullPartitionValue(List<String> value) {
+        if (value == null || value.size() != 1) {
+            return true;
+        }
+        String item = value.get(0);
+        return item == null || "NULL".equalsIgnoreCase(item);
     }
 
     /**
