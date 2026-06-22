@@ -125,6 +125,11 @@ fe-ut:
     KUBERNETES_MEMORY_REQUEST: "60Gi"
     KUBERNETES_MEMORY_LIMIT: "60Gi"
   script:
+    # 安装 JDK 17（fe-core 已要求 maven.compiler.target=17）
+    - apt update
+    - apt install -y openjdk-17-jdk
+    - export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+
     # 设置环境变量
     - |
       fe_filter='--filter com.starrocks.epack.authentication.SecurityIntegrationTest#testSecurityIntegrationDdlPersist,com.starrocks.analysis.ShowProcesslistStmtTest#testSuccess,com.starrocks.load.loadv2.BrokerLoadJobTest#testCommitRateExceeded,com.starrocks.server.ConcurrentDDLTest#testConcurrentlyDropDbAndCreateTable,com.starrocks.http.TransactionLoadActionOnSharedDataClusterTest#beginTransactionWithoutChannelInfoTest,com.starrocks.analysis.SetWarehouseStmtTest#testSetWarehouse,com.starrocks.http.TransactionLoadActionOnSharedDataClusterTest#transactionLoadCoordinatorMgrMultiBeOnSameNodeWithoutChannelTest,com.starrocks.http.TransactionLoadActionOnSharedDataClusterTest#transactionLoadCoordinatorMgrOneBeOnNodeWithoutChannelTest,com.starrocks.http.TransactionLoadActionOnSharedDataClusterTest#transactionLoadCoordinatorMgrWithoutChannelTest,com.starrocks.transaction.LakePublishBatchTest#testPublishTransactionState,com.starrocks.transaction.LakePublishBatchTest#testTransfromSingleToBatch,com.starrocks.transaction.LakePublishBatchTest#testTransformBatchToSingle,com.starrocks.statistic.CacheRelaxDictManagerTest,com.starrocks.alter.LakeSyncMaterializedViewTest#testCreateSyncMV_WithLowerColumn,com.starrocks.alter.LakeSyncMaterializedViewTest#testMaterializedViews,com.starrocks.catalog.CatalogRecycleBinLakeTableTest#testRecycleLakeDatabase(LakeService),com.starrocks.planner.TablePruningTest#testPermuteFromClausesRandomlyAndMoveOnJoinPredicatesToWhereClauses,com.starrocks.backup.BackupHandlerTest#testCreateAndDropRepository,com.starrocks.transaction.LakePublishBatchTest#testBatchPublishReplicationTransaction,com.starrocks.transaction.LakePublishBatchTest#testNormal,com.starrocks.sql.dump.QueryDumpRegressionTest,com.starrocks.sql.dump.QueryDumpCaseRewriter'
@@ -137,6 +142,7 @@ fe-ut:
     - echo "::group::FE UT LOG"
     - |
       export STARROCKS_HOME=${CI_PROJECT_DIR}
+      export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
       echo "Running FE Unit Tests with parallel: $FE_UT_PARALLEL"
       timeout 4000 ./run-fe-ut.sh ${fe_filter}
   rules:
