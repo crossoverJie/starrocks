@@ -114,11 +114,10 @@ be-ut:
     - |
       set +e
       timeout 5400 ./run-be-ut.sh -j $(nproc) --gtest_filter=-BrpcStubCacheTest.test_cleanup:BrpcStubCacheTest.test_lake_cleanup:BrpcStubCacheTest.test_http_cleanup 2>&1 | tee ${CI_PROJECT_DIR}/log/be-ut.log | grep -E --line-buffered '^\[.*\].*FAILED|^\[.*\].*PASSED|^Running test:|error:|Error |FAILED|Fatal|fatal|CMake Error|Build FAILED|ninja: build stopped'
-      BE_EXIT_CODE=${PIPESTATUS[0]}
+      echo $? > ${CI_PROJECT_DIR}/log/be-ut-exit.txt
       set -e
-    - echo "=== BE UT exit code: ${BE_EXIT_CODE} ==="
     - ccache -s
-    - exit ${BE_EXIT_CODE}
+    - exit $(cat ${CI_PROJECT_DIR}/log/be-ut-exit.txt)
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       when: on_success
@@ -159,10 +158,9 @@ fe-ut:
       echo "Running FE Unit Tests with parallel: $FE_UT_PARALLEL"
       set +e
       timeout 4000 ./run-fe-ut.sh ${fe_filter} 2>&1 | tee ${CI_PROJECT_DIR}/log/fe-ut.log | grep -E --line-buffered '^\[ERROR\]|BUILD SUCCESS|BUILD FAILURE|Tests run:|Failed tests:|Tests in error:|^Running '
-      FE_EXIT_CODE=${PIPESTATUS[0]}
+      echo $? > ${CI_PROJECT_DIR}/log/fe-ut-exit.txt
       set -e
-    - echo "=== FE UT exit code: ${FE_EXIT_CODE} ==="
-    - exit ${FE_EXIT_CODE}
+    - exit $(cat ${CI_PROJECT_DIR}/log/fe-ut-exit.txt)
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       when: on_success
@@ -214,11 +212,10 @@ build:
     - |
       set +e
       ./build.sh --be --fe --with-gcov --enable-shared-data -j $(nproc) 2>&1 | tee ${CI_PROJECT_DIR}/log/build.log | grep -E --line-buffered 'error:|Error |FAILED|Fatal|fatal|CMake Error|Build FAILED|ninja: build stopped|BUILD SUCCESS|BUILD FAILURE|^\[.*\].*Building '
-      BUILD_EXIT_CODE=${PIPESTATUS[0]}
+      echo $? > ${CI_PROJECT_DIR}/log/build-exit.txt
       set -e
-    - echo "=== Build exit code: ${BUILD_EXIT_CODE} ==="
     - ccache -s
-    - exit ${BUILD_EXIT_CODE}
+    - exit $(cat ${CI_PROJECT_DIR}/log/build-exit.txt)
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       when: on_success
