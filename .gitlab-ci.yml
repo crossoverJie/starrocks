@@ -81,13 +81,13 @@ be-ut:
     - export DEBIAN_FRONTEND=noninteractive
     - export "GTEST_PARALLEL_OPTIONS=-w 30 -d ${CI_PROJECT_DIR}/log --timeout_per_test 300"
     - export BUILD_JAVA_EXT=ON
-    - apt update
-    - apt install -y pigz openjdk-17-jdk
+    - apt update -qq
+    - apt install -y -qq pigz openjdk-17-jdk > /dev/null
     - export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
     - update-alternatives --install /usr/bin/ld ld /usr/bin/lld-14 1000
     - ld -v
     # 配置 gtest-parallel
-    - git clone https://github.com/google/gtest-parallel.git ${CI_PROJECT_DIR}/gtest-parallel
+    - git clone --depth 1 https://github.com/google/gtest-parallel.git ${CI_PROJECT_DIR}/gtest-parallel
     - chmod +x ${CI_PROJECT_DIR}/gtest-parallel/gtest-parallel
     - export GTEST_PARALLEL=${CI_PROJECT_DIR}/gtest-parallel/gtest-parallel
 
@@ -109,11 +109,24 @@ be-ut:
     - source env.sh
     - export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 
+    # 运行 BE 单元测试，日志写入文件避免超过 CI 日志限制
     - echo "Running BE Unit Tests"
-    - timeout 5400 ./run-be-ut.sh -j $(nproc) --gtest_filter=-BrpcStubCacheTest.test_cleanup:BrpcStubCacheTest.test_lake_cleanup:BrpcStubCacheTest.test_http_cleanup
+    - |
+      set +e
+      timeout 5400 ./run-be-ut.sh -j $(nproc) --gtest_filter=-BrpcStubCacheTest.test_cleanup:BrpcStubCacheTest.test_lake_cleanup:BrpcStubCacheTest.test_http_cleanup 2>&1 | tee ${CI_PROJECT_DIR}/log/be-ut.log | grep -E --line-buffered '^\[.*\].*FAILED|^\[.*\].*PASSED|^Running test:|error:|Error |FAILED|Fatal|fatal|CMake Error|Build FAILED|ninja: build stopped'
+      BE_EXIT_CODE=${PIPESTATUS[0]}
+      set -e
+    - echo "=== BE UT exit code: ${BE_EXIT_CODE} ==="
+    - ccache -s
+    - exit ${BE_EXIT_CODE}
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       when: on_success
+  artifacts:
+    when: always
+    expire_in: 3 days
+    paths:
+      - log/
 
 fe-ut:
   stage: test
@@ -126,8 +139,8 @@ fe-ut:
     KUBERNETES_MEMORY_LIMIT: "60Gi"
   script:
     # 安装 JDK 17（fe-core 已要求 maven.compiler.target=17）
-    - apt update
-    - apt install -y openjdk-17-jdk
+    - apt update -qq
+    - apt install -y -qq openjdk-17-jdk > /dev/null
     - export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 
     # 设置环境变量
@@ -138,16 +151,26 @@ fe-ut:
     - sed -i 's#4096#3072#g' fe/fe-core/pom.xml
     - sed -i 's#2.22.2#3.5.3#g' fe/fe-core/pom.xml
 
-    # 运行 FE 单元测试
-    - echo "::group::FE UT LOG"
+    # 运行 FE 单元测试，日志写入文件避免超过 CI 日志限制
+    - mkdir -p ${CI_PROJECT_DIR}/log
     - |
       export STARROCKS_HOME=${CI_PROJECT_DIR}
       export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
       echo "Running FE Unit Tests with parallel: $FE_UT_PARALLEL"
-      timeout 4000 ./run-fe-ut.sh ${fe_filter}
+      set +e
+      timeout 4000 ./run-fe-ut.sh ${fe_filter} 2>&1 | tee ${CI_PROJECT_DIR}/log/fe-ut.log | grep -E --line-buffered '^\[ERROR\]|BUILD SUCCESS|BUILD FAILURE|Tests run:|Failed tests:|Tests in error:|^Running '
+      FE_EXIT_CODE=${PIPESTATUS[0]}
+      set -e
+    - echo "=== FE UT exit code: ${FE_EXIT_CODE} ==="
+    - exit ${FE_EXIT_CODE}
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       when: on_success
+  artifacts:
+    when: always
+    expire_in: 3 days
+    paths:
+      - log/
 
 # ===== BUILD STAGE =====
 build:
@@ -164,8 +187,8 @@ build:
   script:
     # 配置编译环境
     - export DEBIAN_FRONTEND=noninteractive
-    - apt update
-    - apt install -y pigz openjdk-17-jdk
+    - apt update -qq
+    - apt install -y -qq pigz openjdk-17-jdk > /dev/null
     - export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 
     # 配置 ccache
@@ -186,15 +209,25 @@ build:
     - source env.sh
     - export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 
-    # 完整构建 BE 和 FE，目前不考虑第三方依赖变更的增量构建
-    - ./build.sh --be --fe --with-gcov --enable-shared-data -j $(nproc)
+    # 完整构建 BE 和 FE，日志写入文件避免超过 CI 日志限制
+    - mkdir -p ${CI_PROJECT_DIR}/log
+    - |
+      set +e
+      ./build.sh --be --fe --with-gcov --enable-shared-data -j $(nproc) 2>&1 | tee ${CI_PROJECT_DIR}/log/build.log | grep -E --line-buffered 'error:|Error |FAILED|Fatal|fatal|CMake Error|Build FAILED|ninja: build stopped|BUILD SUCCESS|BUILD FAILURE|^\[.*\].*Building '
+      BUILD_EXIT_CODE=${PIPESTATUS[0]}
+      set -e
+    - echo "=== Build exit code: ${BUILD_EXIT_CODE} ==="
+    - ccache -s
+    - exit ${BUILD_EXIT_CODE}
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       when: on_success
   artifacts:
+    when: always
     expire_in: 3 days
     paths:
       - output/
+      - log/
 
 # ===== DOCKER BUILD STAGE =====
 docker-build:
@@ -230,7 +263,7 @@ docker-build:
         --opt filename=docker/dockerfiles/allin1/allin1-ubuntu.Dockerfile \
         --opt platform=linux/amd64,linux/arm64 \
         --output type=image,name=${DOCKER_REGISTRY_URL}/bigdata/starrocks/allin1-ubuntu:${IMAGE_TAG},push=true
-      
+
       echo "Docker image pushed: ${DOCKER_REGISTRY_URL}/bigdata/starrocks/allin1-ubuntu:${IMAGE_TAG}"
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
